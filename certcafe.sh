@@ -1,0 +1,911 @@
+#!/bin/bash
+
+# ======================================
+#           🏷️ CertCafe v1.0
+#     Your SSL Certificate Café
+# ======================================
+#
+# Welcome to CertCafe! ☕
+# 
+# 今天想来点什么证书？
+# What certificate would you like today?
+#
+# 🍵 招牌特饮 | House Specials:
+#   - 一键安装部署 | One-click Setup
+#   - 多平台支持 | Multi-platform DNS
+#   - 自动续期 | Auto-renewal
+#
+# 🌍 国际风味 | Global Flavors:
+#   Cloudflare, Alibaba, Tencent
+#   DNSPod, Huawei, JD Cloud
+#
+# 用法: ./certcafe.sh
+# Usage: ./certcafe.sh
+# ======================================
+
+SCRIPT_NAME="CertCafe"
+ACME_INSTALL_DIR="$HOME/.acme.sh"
+ACME_URL="https://get.acme.sh"
+
+# 咖啡馆主题颜色
+BROWN='\033[0;33m'
+CREAM='\033[1;37m'  
+ESPRESSO='\033[0;31m'
+MATCHA='\033[0;32m'
+LATTE='\033[1;33m'
+MOCHA='\033[0;34m'
+NC='\033[0m'
+
+# 输出彩色文本
+print_color() {
+    echo -e "${1}${2}${NC}"
+}
+
+# 咖啡馆艺术
+print_cafe_logo() {
+    echo -e "${BROWN}"
+    echo "    )))"
+    echo "   (((("
+    echo "  +-----+"
+    echo "  | ☕  |   CertCafe"
+    echo "  +-----+"
+    echo "    |||"
+    echo -e "${NC}"
+}
+
+print_coffee_cup() {
+    echo -e "${BROWN}"
+    echo "   ( ( )"
+    echo "    ) ) "
+    echo "  ........."
+    echo "  |       |]"
+    echo "  \       /"
+    echo "   \-----/"
+    echo -e "${NC}"
+}
+
+# 检查acme.sh是否已安装
+check_acme_installed() {
+    if [ -f "$ACME_INSTALL_DIR/acme.sh" ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# 安装acme.sh
+install_acme() {
+    print_color $BROWN "开始安装acme.sh..."
+    
+    if check_acme_installed; then
+        print_color $LATTE "acme.sh已经安装，跳过安装步骤"
+        return 0
+    fi
+    
+    # 下载并安装acme.sh
+    curl -s $ACME_URL | sh -s email=my@example.com
+    
+    if [ $? -eq 0 ]; then
+        print_color $MATCHA "acme.sh安装成功！"
+        # 添加到环境变量
+        if [[ ":$PATH:" != *":$ACME_INSTALL_DIR:"* ]]; then
+            echo "export PATH=\"\$PATH:$ACME_INSTALL_DIR\"" >> ~/.bashrc
+            source ~/.bashrc
+        fi
+        return 0
+    else
+        print_color $ESPRESSO "acme.sh安装失败！"
+        return 1
+    fi
+}
+
+# 选择DNS提供商
+select_dns_provider() {
+    while true; do
+		print_color $BROWN "请选择DNS提供商："
+		echo "1) Cloudflare"
+		echo "2) Alibaba Cloud (阿里云)"
+		echo "3) Tencent Cloud (腾讯云)"
+		echo "4) DNSPod"
+		echo "5) Huawei Cloud (华为云)"
+		echo "6) JD Cloud (京东云)"
+		echo "7) 其他（手动配置）"
+		echo "0) ↩️ 返回上一级"
+		read -p "请输入选择 [0-7]: " dns_choice
+		
+		case $dns_choice in
+			0)
+				print_color $LATTE "返回主菜单..."
+				return 2  # 特殊返回码表示用户选择返回
+				;;
+			1)
+				DNS_PROVIDER="dns_cf"
+				read -p "请输入Cloudflare API Key: " cf_key
+				read -p "请输入Cloudflare Email: " cf_email
+				export CF_Key="$cf_key"
+				export CF_Email="$cf_email"
+				print_color $MATCHA "已设置Cloudflare DNS提供商"
+				;;
+			2)
+				DNS_PROVIDER="dns_ali"
+				read -p "请输入阿里云 AccessKey ID: " ali_key
+				read -p "请输入阿里云 AccessKey Secret: " ali_secret
+				export Ali_Key="$ali_key"
+				export Ali_Secret="$ali_secret"
+				print_color $MATCHA "已设置阿里云DNS提供商"
+				;;
+			3)
+				DNS_PROVIDER="dns_dp"
+				read -p "请输入DNSPod ID: " dp_id
+				read -p "请输入DNSPod Key: " dp_key
+				export DP_Id="$dp_id"
+				export DP_Key="$dp_key"
+				print_color $MATCHA "已设置DNSPod DNS提供商"
+				;;
+			4)
+				DNS_PROVIDER="dns_dp"
+				read -p "请输入DNSPod ID: " dp_id
+				read -p "请输入DNSPod Key: " dp_key
+				export DP_Id="$dp_id"
+				export DP_Key="$dp_key"
+				print_color $MATCHA "已设置DNSPod DNS提供商"
+				;;
+			5)
+				DNS_PROVIDER="dns_huaweicloud"
+				read -p "请输入华为云 AccessKey ID: " hw_key
+				read -p "请输入华为云 Secret Access Key: " hw_secret
+				export HUAWEICLOUD_Username="$hw_key"
+				export HUAWEICLOUD_Password="$hw_secret"
+				print_color $MATCHA "已设置华为云DNS提供商"
+				;;
+			6)
+				DNS_PROVIDER="dns_jd"
+				read -p "请输入京东云 AccessKey ID: " jd_access_key
+				read -p "请输入京东云 Secret Access Key: " jd_secret_key
+				export JD_ACCESS_KEY_ID="$jd_access_key"
+				export JD_ACCESS_KEY_SECRET="$jd_secret_key"
+				print_color $MATCHA "已设置京东云DNS提供商"
+				;;
+			7)
+				print_color $LATTE "请手动配置DNS API环境变量"
+				read -p "请输入DNS提供商（如dns_xxx）: " DNS_PROVIDER
+				print_color $LATTE "请确保已设置相应的环境变量"
+				;;
+			*)
+				print_color $ESPRESSO "无效选择！请输入 0-7 之间的数字"
+				echo ""
+				read -p "按回车键重新选择..."
+				continue
+				;;
+		esac
+	done
+    
+    # 验证必要的环境变量是否设置
+    validate_dns_credentials
+}
+
+# 验证DNS凭据
+validate_dns_credentials() {
+    case $DNS_PROVIDER in
+        dns_cf)
+            if [ -z "$CF_Key" ] || [ -z "$CF_Email" ]; then
+                print_color $ESPRESSO "错误：Cloudflare API Key 或 Email 未设置"
+                return 1
+            fi
+            ;;
+        dns_ali)
+            if [ -z "$Ali_Key" ] || [ -z "$Ali_Secret" ]; then
+                print_color $ESPRESSO "错误：阿里云 AccessKey 或 Secret 未设置"
+                return 1
+            fi
+            ;;
+        dns_dp)
+            if [ -z "$DP_Id" ] || [ -z "$DP_Key" ]; then
+                print_color $ESPRESSO "错误：DNSPod ID 或 Key 未设置"
+                return 1
+            fi
+            ;;
+        dns_huaweicloud)
+            if [ -z "$HUAWEICLOUD_Username" ] || [ -z "$HUAWEICLOUD_Password" ]; then
+                print_color $ESPRESSO "错误：华为云 AccessKey 或 Secret 未设置"
+                return 1
+            fi
+            ;;
+        dns_jd)
+            if [ -z "$JD_ACCESS_KEY_ID" ] || [ -z "$JD_ACCESS_KEY_SECRET" ]; then
+                print_color $ESPRESSO "错误：京东云 AccessKey ID 或 Secret 未设置"
+                return 1
+            fi
+            ;;
+    esac
+    return 0
+}
+
+# 显示DNS提供商帮助信息
+show_dns_help() {
+    print_color $LATTE "DNS API 配置说明："
+    echo "======================================"
+    echo "京东云配置方法："
+    echo "1. 登录京东云控制台"
+    echo "2. 进入『访问控制』->『用户管理』"
+    echo "3. 创建子用户或使用现有用户"
+    echo "4. 为用户添加『JDCloudDNSFullAccess』权限"
+    echo "5. 在『AccessKey管理』中创建AccessKey"
+    echo "6. 将AccessKey ID和Secret Key输入到脚本中"
+    echo ""
+    echo "其他云服务商类似，需要相应的API权限"
+    echo "======================================"
+    read -p "按回车键继续..."
+}
+
+# 一键安装部署
+auto_deploy() {
+    print_color $MATCHA "开始一键安装部署..."
+    
+    # 显示DNS帮助信息
+    show_dns_help
+    
+    # 1. 安装acme.sh
+    if ! install_acme; then
+        return 1
+    fi
+    
+    # 2. 选择DNS提供商
+	select_dns_provider
+    local dns_result=$?
+	
+	if [ $dns_result -eq 2 ]; then
+        print_color $LATTE "已取消DNS提供商选择，返回主菜单"
+        return 0
+    elif [ $dns_result -ne 0 ]; then
+        print_color $ESPRESSO "DNS凭据验证失败，请重新配置"
+        return 1
+    fi
+    
+    # 3. 输入域名信息
+    read -p "请输入主域名（例如：example.com）: " main_domain
+    
+    # 验证域名格式
+    if ! [[ $main_domain =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        print_color $ESPRESSO "域名格式不正确，请重新输入"
+        return 1
+    fi
+    
+    read -p "请输入要签发的域名（多个用空格分隔，留空则使用主域名）: " domains
+    
+    if [ -z "$domains" ]; then
+        domains="$main_domain"
+        print_color $BROWN "将为主域名 $main_domain 签发证书"
+    else
+        domains="$main_domain $domains"
+        print_color $BROWN "将为以下域名签发证书: $domains"
+    fi
+    
+    # 4. 选择证书类型
+    print_color $BROWN "请选择证书类型："
+    echo "1) RSA (默认，兼容性好)"
+    echo "2) ECC (更安全，体积小)"
+    read -p "请输入选择 [1-2]: " cert_choice
+    
+    case $cert_choice in
+        2)
+            KEY_LENGTH="ec-256"
+            CERT_TYPE="ECC"
+            print_color $MATCHA "已选择ECC证书"
+            ;;
+        *)
+            KEY_LENGTH="2048"
+            CERT_TYPE="RSA"
+            print_color $MATCHA "已选择RSA证书"
+            ;;
+    esac
+    
+    # 5. 选择证书颁发机构
+    print_color $BROWN "请选择证书颁发机构："
+    echo "1) Let's Encrypt (默认)"
+    echo "2) ZeroSSL"
+    echo "3) Buypass"
+    read -p "请输入选择 [1-3]: " ca_choice
+    
+    case $ca_choice in
+        2)
+            CA_SERVER="--server zerossl"
+            CA_NAME="ZeroSSL"
+            ;;
+        3)
+            CA_SERVER="--server buypass"
+            CA_NAME="Buypass"
+            ;;
+        *)
+            CA_SERVER=""
+            CA_NAME="Let's Encrypt"
+            ;;
+    esac
+    
+    print_color $MATCHA "使用证书颁发机构: $CA_NAME"
+    
+    # 6. 签发证书
+    print_color $BROWN "开始签发${CERT_TYPE}证书..."
+    
+    cd $ACME_INSTALL_DIR
+    
+    for domain in $domains; do
+        print_color $LATTE "正在为域名 $domain 签发证书..."
+        print_color $BROWN "使用的DNS提供商: $DNS_PROVIDER"
+        
+        # 执行签发命令
+        if [ "$CERT_TYPE" = "ECC" ]; then
+            ./acme.sh --issue --dns $DNS_PROVIDER -d "$domain" --keylength ec-256 $CA_SERVER
+        else
+            ./acme.sh --issue --dns $DNS_PROVIDER -d "$domain" --keylength 2048 $CA_SERVER
+        fi
+        
+        if [ $? -eq 0 ]; then
+            print_color $MATCHA "域名 $domain 证书签发成功！"
+            
+            # 询问是否安装证书
+            read -p "是否安装证书到指定目录？[y/N]: " install_choice
+            if [[ $install_choice =~ ^[Yy]$ ]]; then
+                read -p "请输入证书安装目录（默认：/etc/ssl/$domain）: " install_dir
+                install_dir=${install_dir:-"/etc/ssl/$domain"}
+                
+                # 创建目录
+                sudo mkdir -p "$install_dir"
+                
+                # 安装证书
+                ./acme.sh --install-cert -d "$domain" \
+                    --cert-file "$install_dir/cert.pem" \
+                    --key-file "$install_dir/key.pem" \
+                    --fullchain-file "$install_dir/fullchain.pem" \
+                    --reloadcmd "echo '证书已安装到 $install_dir'"
+                
+                if [ $? -eq 0 ]; then
+                    print_color $MATCHA "证书已成功安装到 $install_dir"
+                    
+                    # 显示证书文件权限
+                    echo "证书文件权限："
+                    ls -la "$install_dir/" | grep -E "(cert.pem|key.pem|fullchain.pem)"
+                else
+                    print_color $ESPRESSO "证书安装失败"
+                fi
+            fi
+            
+            # 显示证书信息
+            echo ""
+            print_color $BROWN "证书信息："
+            ./acme.sh --info -d "$domain"
+            
+        else
+            print_color $ESPRESSO "域名 $domain 证书签发失败！"
+            print_color $LATTE "请检查："
+            echo "1. DNS API凭据是否正确"
+            echo "2. 域名解析是否生效"
+            echo "3. 网络连接是否正常"
+        fi
+        echo "--------------------------------------"
+    done
+}
+
+# 手动更新证书
+manual_renew() {
+    if ! check_acme_installed; then
+        print_color $ESPRESSO "acme.sh未安装，请先执行一键安装部署！"
+        return 1
+    fi
+    
+    cd $ACME_INSTALL_DIR
+    
+    print_color $BROWN "请选择更新方式："
+    echo "1) 更新所有证书"
+    echo "2) 更新指定域名证书"
+    echo "3) 强制更新所有证书（忽略有效期）"
+	echo "0) 返回上一级菜单"
+    read -p "请输入选择 [0-3]: " renew_choice
+    
+    case $renew_choice in
+        1)
+            print_color $LATTE "开始更新所有证书..."
+            ./acme.sh --renew-all
+            ;;
+        2)
+            read -p "请输入要更新的域名: " renew_domain
+            if [ -z "$renew_domain" ]; then
+                print_color $ESPRESSO "域名不能为空"
+                return 1
+            fi
+            print_color $LATTE "开始更新域名 $renew_domain 的证书..."
+            ./acme.sh --renew -d "$renew_domain"
+            ;;
+        3)
+            print_color $LATTE "开始强制更新所有证书..."
+            ./acme.sh --renew-all --force
+            ;;
+		0)
+			print_color $MATCHA "返回上一级菜单..."
+			return 0
+			;;
+        *)
+            print_color $ESPRESSO "无效选择"
+            return 1
+            ;;
+    esac
+    
+    if [ $? -eq 0 ]; then
+        print_color $MATCHA "证书更新成功！"
+    else
+        print_color $ESPRESSO "证书更新失败！"
+    fi
+}
+
+# 查看已安装证书列表
+list_certificates() {
+    if ! check_acme_installed; then
+        print_color $ESPRESSO "acme.sh未安装，请先执行一键安装部署！"
+        return 1
+    fi
+    
+    cd $ACME_INSTALL_DIR
+    
+    print_color $BROWN "已安装的证书列表："
+    echo "======================================"
+    
+    # 使用acme.sh内置命令列出证书
+    ./acme.sh --list
+    
+    echo ""
+    print_color $LATTE "证书存储目录: $ACME_INSTALL_DIR"
+}
+
+# 查看指定证书信息
+view_certificate() {
+    if ! check_acme_installed; then
+        print_color $ESPRESSO "acme.sh未安装，请先执行一键安装部署！"
+        return 1
+    fi
+    
+    cd $ACME_INSTALL_DIR
+    
+    read -p "请输入要查看的域名: " view_domain
+    
+    if [ -z "$view_domain" ]; then
+        print_color $ESPRESSO "域名不能为空"
+        return 1
+    fi
+    
+    print_color $MATCHA "证书信息 - $view_domain"
+    echo "======================================"
+    
+    # 使用acme.sh查看证书信息
+    ./acme.sh --info -d "$view_domain"
+    
+    if [ $? -ne 0 ]; then
+        print_color $ESPRESSO "未找到域名 $view_domain 的证书信息"
+        return 1
+    fi
+    
+    # 显示证书文件详情
+    cert_dir="$ACME_INSTALL_DIR/$view_domain"
+    if [ -d "$cert_dir" ]; then
+        echo ""
+        print_color $BROWN "证书文件："
+        ls -la "$cert_dir/" | grep -E "\.(cer|key|pem|crt)$"
+    fi
+}
+
+# 卸载/删除证书
+uninstall_certificate() {
+    if ! check_acme_installed; then
+        print_color $ESPRESSO "acme.sh未安装，无需卸载"
+        return 1
+    fi
+    
+    cd $ACME_INSTALL_DIR
+    
+    print_color $BROWN "请选择卸载选项："
+    echo "1) 删除单个域名证书"
+    echo "2) 删除所有证书"
+    echo "3) 仅移除自动续期（保留证书文件）"
+    read -p "请输入选择 [1-3]: " uninstall_choice
+    
+    case $uninstall_choice in
+        1)
+            uninstall_single_cert
+            ;;
+        2)
+            uninstall_all_certs
+            ;;
+        3)
+            disable_auto_renew
+            ;;
+        *)
+            print_color $ESPRESSO "无效选择"
+            return 1
+            ;;
+    esac
+}
+
+# 卸载单个证书
+uninstall_single_cert() {
+    echo -e "${BROWN}请告诉我您想卸载哪个域名的证书${NC}"
+    
+    # 显示当前证书列表
+    echo -e "${CREAM}当前安装的证书：${NC}"
+    echo "======================================"
+    ./acme.sh --list | grep -v "Main_Domain" | while read line; do
+        if [ -n "$line" ]; then
+            domain=$(echo "$line" | awk '{print $1}')
+            echo "  📄 $domain"
+        fi
+    done
+    echo "======================================"
+    
+    read -p "请输入要卸载的域名: " uninstall_domain
+    
+    if [ -z "$uninstall_domain" ]; then
+        print_color $ESPRESSO "域名不能为空"
+        return 1
+    fi
+    
+    # 检查证书是否存在
+    if [ ! -d "$ACME_INSTALL_DIR/$uninstall_domain" ]; then
+        print_color $ESPRESSO "未找到域名 $uninstall_domain 的证书"
+        return 1
+    fi
+    
+    # 确认卸载
+    print_color $ESPRESSO "⚠️  即将卸载证书：$uninstall_domain"
+    echo -e "${CREAM}这将执行以下操作：${NC}"
+    echo "  • 删除证书文件"
+    echo "  • 移除自动续期任务"
+    echo "  • 清理配置信息"
+    echo
+    read -p "确定要卸载吗？[y/N]: " confirm_uninstall
+    
+    if [[ ! $confirm_uninstall =~ ^[Yy]$ ]]; then
+        print_color $LATTE "卸载已取消"
+        return 0
+    fi
+    
+    # 执行卸载
+    print_brewing "正在卸载证书 $uninstall_domain ..."
+    
+    # 使用acme.sh的卸载功能
+    ./acme.sh --remove -d "$uninstall_domain"
+    
+    if [ $? -eq 0 ]; then
+        print_color $MATCHA "✅ 证书 $uninstall_domain 卸载成功！"
+        
+        # 额外清理
+        if [ -d "$ACME_INSTALL_DIR/$uninstall_domain" ]; then
+            rm -rf "$ACME_INSTALL_DIR/$uninstall_domain"
+            print_color $MATCHA "已清理残留文件"
+        fi
+    else
+        print_color $ESPRESSO "❌ 证书卸载失败，尝试手动清理..."
+        manual_cleanup "$uninstall_domain"
+    fi
+}
+
+# 卸载所有证书
+uninstall_all_certs() {
+    print_color $ESPRESSO "🚨 警告：这将删除所有证书！"
+    echo -e "${CREAM}受影响的操作：${NC}"
+    echo "  • 删除所有证书文件"
+    echo "  • 移除所有自动续期任务"
+    echo "  • 清理所有证书配置"
+    echo
+    echo -e "${LATTE}这通常用于：${NC}"
+    echo "  • 服务器迁移前"
+    echo "  • 彻底重置证书系统"
+    echo "  • 测试环境清理"
+    echo
+    
+    read -p "您确定要删除所有证书吗？[yes/NO]: " confirm_all
+    
+    if [ "$confirm_all" != "yes" ]; then
+        print_color $LATTE "操作已取消"
+        return 0
+    fi
+    
+    print_brewing "开始卸载所有证书..."
+    
+    # 获取所有证书域名
+    local cert_domains=$(./acme.sh --list | grep -v "Main_Domain" | awk '{print $1}')
+    local count=0
+    
+    if [ -z "$cert_domains" ]; then
+        print_color $LATTE "没有找到可卸载的证书"
+        return 0
+    fi
+    
+    for domain in $cert_domains; do
+        print_brewing "卸载证书: $domain"
+        ./acme.sh --remove -d "$domain"
+        if [ $? -eq 0 ]; then
+            print_color $MATCHA "✅ 已卸载: $domain"
+            count=$((count + 1))
+        else
+            print_color $ESPRESSO "❌ 卸载失败: $domain"
+        fi
+    done
+    
+    # 清理残留目录
+    print_brewing "清理残留文件..."
+    find "$ACME_INSTALL_DIR" -maxdepth 1 -type d -name "*.com" -o -name "*.org" -o -name "*.net" | while read dir; do
+        if [ -d "$dir" ]; then
+            rm -rf "$dir"
+            print_color $MATCHA "已清理: $(basename "$dir")"
+        fi
+    done
+    
+    print_color $MATCHA "🎉 证书卸载完成！共卸载 $count 个证书"
+    print_color $LATTE "☕ 所有SSL证书已被清理"
+}
+
+# 禁用自动续期
+disable_auto_renew() {
+     echo -e "${BROWN}您想禁用哪个域名的自动续期？${NC}"
+    
+    # 显示当前证书列表
+    echo -e "${CREAM}当前证书列表：${NC}"
+    echo "======================================"
+    ./acme.sh --list | grep -v "Main_Domain" | while read line; do
+        if [ -n "$line" ]; then
+            domain=$(echo "$line" | awk '{print $1}')
+            echo "  🔄 $domain"
+        fi
+    done
+    echo "======================================"
+    
+    read -p "请输入域名（留空则禁用所有）: " disable_domain
+    
+    if [ -z "$disable_domain" ]; then
+        print_color $ESPRESSO "⚠️  将禁用所有证书的自动续期"
+        read -p "确定要继续吗？[yes/NO]: " confirm_disable_all
+        
+        if [ "$confirm_disable_all" != "yes" ]; then
+            print_color $LATTE "操作已取消"
+            return 0
+        fi
+        
+        # 禁用所有自动续期
+        local cert_domains=$(./acme.sh --list | grep -v "Main_Domain" | awk '{print $1}')
+        local count=0
+        
+        for domain in $cert_domains; do
+            ./acme.sh --remove -d "$domain" --auto-upgrade 0
+            if [ $? -eq 0 ]; then
+                print_color $MATCHA "✅ 已禁用自动续期: $domain"
+                count=$((count + 1))
+            fi
+        done
+        
+        print_color $MATCHA "已禁用 $count 个证书的自动续期"
+        
+    else
+        # 禁用单个域名的自动续期
+        ./acme.sh --remove -d "$disable_domain" --auto-upgrade 0
+        
+        if [ $? -eq 0 ]; then
+            print_color $MATCHA "✅ 已禁用 $disable_domain 的自动续期"
+            print_color $LATTE "证书文件仍然保留，但不会自动更新"
+        else
+            print_color $ESPRESSO "❌ 操作失败"
+        fi
+    fi
+}
+
+# 手动清理（备用方案）
+manual_cleanup() {
+    local domain="$1"
+    
+     echo -e "${BROWN}尝试手动清理 $domain${NC}"
+    
+    # 清理证书目录
+    if [ -d "$ACME_INSTALL_DIR/$domain" ]; then
+        rm -rf "$ACME_INSTALL_DIR/$domain"
+        print_color $MATCHA "已删除证书目录: $ACME_INSTALL_DIR/$domain"
+    fi
+    
+    # 清理cron任务（如果存在）
+    local cron_count=$(crontab -l 2>/dev/null | grep -c "$domain")
+    if [ $cron_count -gt 0 ]; then
+        crontab -l | grep -v "$domain" | crontab -
+        print_color $MATCHA "已移除相关的自动续期任务"
+    fi
+    
+    # 清理配置引用
+    local config_file="$ACME_INSTALL_DIR/account.conf"
+    if [ -f "$config_file" ] && grep -q "$domain" "$config_file"; then
+        sed -i "/$domain/d" "$config_file"
+        print_color $MATCHA "已清理配置引用"
+    fi
+    
+    print_color $MATCHA "手动清理完成"
+}
+
+# 证书状态检查
+check_cert_status() {
+    # 动态查找acme.sh路径
+    find_acme_path() {
+        local paths=(
+            "$HOME/.acme.sh"
+            "/root/.acme.sh" 
+            "/usr/local/share/acme.sh"
+            "$(dirname "$(which acme.sh 2>/dev/null)" 2>/dev/null)"
+        )
+        
+        for path in "${paths[@]}"; do
+            if [ -f "$path/acme.sh" ]; then
+                echo "$path"
+                return 0
+            fi
+        done
+        return 1
+    }
+    
+    # 查找acme.sh安装目录
+    local found_dir=$(find_acme_path)
+    if [ -z "$found_dir" ]; then
+        print_color $ESPRESSO "❌ 未找到 acme.sh，请先运行一键安装部署"
+        return 1
+    fi
+    
+    ACME_INSTALL_DIR="$found_dir"
+    cd "$ACME_INSTALL_DIR"
+    
+    print_color $BROWN "📊 证书状态报告"
+    echo "======================================"
+    echo -e "${CREAM}检测路径: $ACME_INSTALL_DIR${NC}"
+    echo ""
+    
+    local cert_count=0
+    local renew_count=0
+    local expiring_count=0
+    
+    # 主要检测方法：直接扫描证书目录
+    echo -e "${CREAM}扫描证书目录...${NC}"
+    for item in "$ACME_INSTALL_DIR"/*; do
+        if [ -d "$item" ]; then
+            local domain=$(basename "$item")
+            # 检查是否是有效的证书目录（包含证书文件）
+            if [ -f "$item/fullchain.cer" ] || [ -f "$item/$domain.key" ]; then
+                cert_count=$((cert_count + 1))
+                
+                echo -e "${CREAM}📄 证书: $domain${NC}"
+                
+                # 检查证书过期时间
+                if [ -f "$item/fullchain.cer" ]; then
+                    local expiry=$(openssl x509 -in "$item/fullchain.cer" -noout -enddate 2>/dev/null 2>/dev/null | cut -d= -f2)
+                    if [ -n "$expiry" ]; then
+                        echo -e "  📅 过期时间: $expiry"
+                        
+                        # 计算剩余天数
+                        local expiry_epoch=$(date -d "$expiry" +%s 2>/dev/null)
+                        local current_epoch=$(date +%s)
+                        if [ -n "$expiry_epoch" ] && [ "$expiry_epoch" -gt "$current_epoch" ]; then
+                            local days_left=$(( (expiry_epoch - current_epoch) / 86400 ))
+                            if [ $days_left -lt 10 ]; then
+                                echo -e "  ⚠️  剩余天数: ${ESPRESSO}$days_left 天${NC}"
+                                expiring_count=$((expiring_count + 1))
+                            else
+                                echo -e "  ✅ 剩余天数: ${MATCHA}$days_left 天${NC}"
+                            fi
+                        else
+                            echo -e "  ❌ 证书已过期"
+                            expiring_count=$((expiring_count + 1))
+                        fi
+                    fi
+                fi
+                
+                # 检查自动续期
+                local renew_status=$(crontab -l 2>/dev/null | grep -c "$domain")
+                if [ $renew_status -gt 0 ]; then
+                    echo -e "  🔄 自动续期: ${MATCHA}启用${NC}"
+                    renew_count=$((renew_count + 1))
+                else
+                    echo -e "  ⏸️  自动续期: ${LATTE}禁用${NC}"
+                fi
+                
+                echo ""
+            fi
+        fi
+    done
+    
+    # 显示结果
+    echo "======================================"
+    echo -e "${CREAM}📈 统计信息：${NC}"
+    if [ $cert_count -eq 0 ]; then
+        echo -e "  ${LATTE}暂无已安装的证书${NC}"
+        echo -e "  ${LATTE}请使用『☕ 一键冲泡证书』功能申请SSL证书${NC}"
+    else
+        echo -e "  总证书数: ${MATCHA}$cert_count${NC}"
+        echo -e "  自动续期: ${MATCHA}$renew_count${NC}"
+        echo -e "  禁用续期: ${LATTE}$((cert_count - renew_count))${NC}"
+        if [ $expiring_count -gt 0 ]; then
+            echo -e "  即将过期: ${ESPRESSO}$expiring_count${NC}"
+        fi
+    fi
+    echo ""
+}
+
+# 显示主菜单
+show_menu() {
+    clear
+    print_cafe_logo
+	echo -e "${CREAM}======================================${NC}"
+    echo -e "${BROWN}        🏷️ CertCafe 主菜单${NC}"
+    echo -e "${CREAM}======================================${NC}"
+    echo "1) 一键安装部署"
+    echo "2) 手动更新证书"
+    echo "3) 查看已安装证书列表"
+    echo "4) 查看指定证书信息"
+    echo "5) 显示DNS配置帮助"
+    echo "6) 卸载/停止证书"
+	echo "7) 证书状态报告"
+	echo "0) 退出"
+    echo ""
+}
+
+# 离开信息
+goodbye_from_cafe() {
+    echo -e "${BROWN}感谢光临 CertCafe！${NC}"
+    print_coffee_cup
+    echo -e "${CREAM}期待您的再次光临！👋${NC}"
+    echo -e "${LATTE}记住：好网站，从一杯安全的证书开始！${NC}"
+    echo ""
+}
+
+# 主函数
+main() {
+    while true; do
+        show_menu
+        read -p "请选择操作 [0-7]: " choice
+        
+        case $choice in
+			0)
+                goodbye_from_cafe
+                exit 0
+                ;;
+            1)
+				clear
+                auto_deploy
+                ;;
+            2)
+                manual_renew
+                ;;
+            3)
+                list_certificates
+                ;;
+            4)
+                view_certificate
+                ;;
+            5)
+                show_dns_help
+                ;;
+            6)
+                uninstall_certificate
+                ;;
+			7)
+                check_cert_status
+                ;;
+            *)
+                print_color $ESPRESSO "无效选择，请重新输入！"
+                ;;
+        esac
+        
+        echo ""
+        read -p "按回车键继续..."
+    done
+}
+
+# 脚本启动
+if [ "$(id -u)" -eq 0 ]; then
+    print_color $LATTE "警告：不建议使用root用户执行此脚本"
+    read -p "是否继续？[y/N]: " continue_choice
+    if [[ ! $continue_choice =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
+main
