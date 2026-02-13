@@ -125,6 +125,7 @@ select_dns_provider() {
 				export CF_Key="$cf_key"
 				export CF_Email="$cf_email"
 				print_color $MATCHA "已设置Cloudflare DNS提供商"
+				break
 				;;
 			2)
 				DNS_PROVIDER="dns_ali"
@@ -133,6 +134,7 @@ select_dns_provider() {
 				export Ali_Key="$ali_key"
 				export Ali_Secret="$ali_secret"
 				print_color $MATCHA "已设置阿里云DNS提供商"
+				break
 				;;
 			3)
 				DNS_PROVIDER="dns_dp"
@@ -141,6 +143,7 @@ select_dns_provider() {
 				export DP_Id="$dp_id"
 				export DP_Key="$dp_key"
 				print_color $MATCHA "已设置DNSPod DNS提供商"
+				break
 				;;
 			4)
 				DNS_PROVIDER="dns_dp"
@@ -149,6 +152,7 @@ select_dns_provider() {
 				export DP_Id="$dp_id"
 				export DP_Key="$dp_key"
 				print_color $MATCHA "已设置DNSPod DNS提供商"
+				break
 				;;
 			5)
 				DNS_PROVIDER="dns_huaweicloud"
@@ -157,6 +161,7 @@ select_dns_provider() {
 				export HUAWEICLOUD_Username="$hw_key"
 				export HUAWEICLOUD_Password="$hw_secret"
 				print_color $MATCHA "已设置华为云DNS提供商"
+				break
 				;;
 			6)
 				DNS_PROVIDER="dns_jd"
@@ -165,11 +170,13 @@ select_dns_provider() {
 				export JD_ACCESS_KEY_ID="$jd_access_key"
 				export JD_ACCESS_KEY_SECRET="$jd_secret_key"
 				print_color $MATCHA "已设置京东云DNS提供商"
+				break
 				;;
 			7)
 				print_color $LATTE "请手动配置DNS API环境变量"
 				read -p "请输入DNS提供商（如dns_xxx）: " DNS_PROVIDER
 				print_color $LATTE "请确保已设置相应的环境变量"
+				break
 				;;
 			*)
 				print_color $ESPRESSO "无效选择！请输入 0-7 之间的数字"
