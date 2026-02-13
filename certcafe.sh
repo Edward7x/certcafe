@@ -137,12 +137,12 @@ select_dns_provider() {
 				break
 				;;
 			3)
-				DNS_PROVIDER="dns_dp"
-				read -p "请输入DNSPod ID: " dp_id
-				read -p "请输入DNSPod Key: " dp_key
-				export DP_Id="$dp_id"
-				export DP_Key="$dp_key"
-				print_color $MATCHA "已设置DNSPod DNS提供商"
+				DNS_PROVIDER="dns_tencent"
+				read -p "请输入腾讯云 SecretId: " tc_secret_id
+				read -p "请输入腾讯云 SecretKey: " tc_secret_key
+				export Tencent_SecretId="$tc_secret_id"
+				export Tencent_SecretKey="$tc_secret_key"
+				print_color $MATCHA "已设置腾讯云 DNS 提供商"
 				break
 				;;
 			4)
@@ -203,6 +203,12 @@ validate_dns_credentials() {
         dns_ali)
             if [ -z "$Ali_Key" ] || [ -z "$Ali_Secret" ]; then
                 print_color $ESPRESSO "错误：阿里云 AccessKey 或 Secret 未设置"
+                return 1
+            fi
+            ;;
+        dns_tencent)
+            if [ -z "$Tencent_SecretId" ] || [ -z "$Tencent_SecretKey" ]; then
+                print_color $ESPRESSO "错误：腾讯云 SecretId 或 SecretKey 未设置"
                 return 1
             fi
             ;;
@@ -836,6 +842,37 @@ check_cert_status() {
     echo ""
 }
 
+# 查看当前配置的环境变量
+show_env_config() {
+    clear
+    print_color $BROWN "当前配置的环境变量（敏感信息已脱敏）"
+    echo -e "${CREAM}----------------------------------------${NC}"
+    echo ""
+
+    # 当前 shell 的 DNS 相关变量（可能未设置）
+    if [ -n "$DNS_PROVIDER" ]; then
+        print_color $MATCHA "DNS_PROVIDER = $DNS_PROVIDER"
+    else
+        echo "DNS_PROVIDER = （未设置）"
+    fi
+
+    echo "各 DNS 提供商凭据状态："
+    echo "  Cloudflare:    CF_Key=$([ -n "$CF_Key" ] && echo '***已设置***' || echo '（未设置）')  CF_Email=$([ -n "$CF_Email" ] && echo '***已设置***' || echo '（未设置）')"
+    echo "  阿里云:        Ali_Key=$([ -n "$Ali_Key" ] && echo '***已设置***' || echo '（未设置）')  Ali_Secret=$([ -n "$Ali_Secret" ] && echo '***已设置***' || echo '（未设置）')"
+    echo "  腾讯云:        Tencent_SecretId=$([ -n "$Tencent_SecretId" ] && echo '***已设置***' || echo '（未设置）')  Tencent_SecretKey=$([ -n "$Tencent_SecretKey" ] && echo '***已设置***' || echo '（未设置）')"
+    echo "  DNSPod:        DP_Id=$([ -n "$DP_Id" ] && echo '***已设置***' || echo '（未设置）')  DP_Key=$([ -n "$DP_Key" ] && echo '***已设置***' || echo '（未设置）')"
+    echo "  华为云:        HUAWEICLOUD_Username=$([ -n "$HUAWEICLOUD_Username" ] && echo '***已设置***' || echo '（未设置）')  HUAWEICLOUD_Password=$([ -n "$HUAWEICLOUD_Password" ] && echo '***已设置***' || echo '（未设置）')"
+    echo "  京东云:        JD_ACCESS_KEY_ID=$([ -n "$JD_ACCESS_KEY_ID" ] && echo '***已设置***' || echo '（未设置）')  JD_ACCESS_KEY_SECRET=$([ -n "$JD_ACCESS_KEY_SECRET" ] && echo '***已设置***' || echo '（未设置）')"
+
+    echo ""
+    if [ -n "$ACME_INSTALL_DIR" ]; then
+        echo "ACME_INSTALL_DIR = $ACME_INSTALL_DIR"
+    else
+        echo "ACME_INSTALL_DIR = （未设置，将使用默认）"
+    fi
+    echo ""
+}
+
 # 显示主菜单
 show_menu() {
     clear
@@ -850,6 +887,7 @@ show_menu() {
     echo "5) 显示DNS配置帮助"
     echo "6) 卸载/停止证书"
 	echo "7) 证书状态报告"
+	echo "8) 查看当前配置的环境变量"
 	echo "0) 退出"
     echo ""
 }
@@ -867,7 +905,7 @@ goodbye_from_cafe() {
 main() {
     while true; do
         show_menu
-        read -p "请选择操作 [0-7]: " choice
+        read -p "请选择操作 [0-8]: " choice
         
         case $choice in
 			0)
@@ -895,6 +933,9 @@ main() {
                 ;;
 			7)
                 check_cert_status
+                ;;
+            8)
+                show_env_config
                 ;;
             *)
                 print_color $ESPRESSO "无效选择，请重新输入！"
