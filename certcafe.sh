@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # ======================================
 #           🏷️ CertCafe v1.0
@@ -39,6 +39,11 @@ NC='\033[0m'
 # 输出彩色文本
 print_color() {
     echo -e "${1}${2}${NC}"
+}
+
+# 输出“进行中”类提示（与 print_color 风格一致）
+print_brewing() {
+    print_color $BROWN "$1"
 }
 
 # 咖啡馆艺术
@@ -251,31 +256,98 @@ show_dns_help() {
     read -p "按回车键继续..."
 }
 
+# 选择域名验证方式（DNS 或 HTTP）
+select_verify_method() {
+    while true; do
+        print_color $BROWN "请选择域名验证方式："
+        echo "1) DNS 验证（需配置 DNS 提供商 API，支持泛域名）"
+        echo "2) HTTP 验证（需域名已解析到本机，占用 80 端口或提供网站根目录）"
+        echo "0) 返回上一级"
+        read -p "请输入选择 [0-2]: " verify_choice
+        case $verify_choice in
+            0)
+                return 2
+                ;;
+            1)
+                VERIFY_METHOD="dns"
+                print_color $MATCHA "已选择 DNS 验证"
+                return 0
+                ;;
+            2)
+                VERIFY_METHOD="http"
+                print_color $BROWN "请选择 HTTP 验证方式："
+                echo "1) Standalone（临时占用 80 端口，签发时请确保无其他程序占用 80 端口）"
+                echo "2) Webroot（将验证文件写入网站根目录，需已运行 Web 服务）"
+                echo "0) 返回"
+                read -p "请输入选择 [0-2]: " http_mode_choice
+                case $http_mode_choice in
+                    0) continue ;;
+                    1)
+                        HTTP_MODE="standalone"
+                        print_color $MATCHA "已选择 Standalone 模式"
+                        return 0
+                        ;;
+                    2)
+                        HTTP_MODE="webroot"
+                        read -p "请输入网站根目录（如 /var/www/html）: " WEBROOT_PATH
+                        if [ -z "$WEBROOT_PATH" ]; then
+                            print_color $ESPRESSO "网站根目录不能为空"
+                            continue
+                        fi
+                        if [ ! -d "$WEBROOT_PATH" ]; then
+                            print_color $ESPRESSO "目录不存在: $WEBROOT_PATH"
+                            read -p "是否继续？[y/N]: " cont
+                            [[ ! $cont =~ ^[Yy]$ ]] && continue
+                        fi
+                        print_color $MATCHA "已选择 Webroot 模式，根目录: $WEBROOT_PATH"
+                        return 0
+                        ;;
+                    *)
+                        print_color $ESPRESSO "无效选择"
+                        continue
+                        ;;
+                esac
+                ;;
+            *)
+                print_color $ESPRESSO "无效选择，请输入 0、1 或 2"
+                continue
+                ;;
+        esac
+    done
+}
+
 # 一键安装部署
 auto_deploy() {
     print_color $MATCHA "开始一键安装部署..."
     
-    # 显示DNS帮助信息
-    show_dns_help
-    
-    # 1. 安装acme.sh
+    # 1. 安装 acme.sh
     if ! install_acme; then
         return 1
     fi
     
-    # 2. 选择DNS提供商
-	select_dns_provider
-    local dns_result=$?
-	
-	if [ $dns_result -eq 2 ]; then
-        print_color $LATTE "已取消DNS提供商选择，返回主菜单"
+    # 2. 选择验证方式（DNS / HTTP）
+    select_verify_method
+    local verify_result=$?
+    if [ $verify_result -eq 2 ]; then
+        print_color $LATTE "已取消，返回主菜单"
         return 0
-    elif [ $dns_result -ne 0 ]; then
-        print_color $ESPRESSO "DNS凭据验证失败，请重新配置"
-        return 1
     fi
     
-    # 3. 输入域名信息
+    # 3. 若为 DNS 验证，显示帮助并选择 DNS 提供商
+    if [ "$VERIFY_METHOD" = "dns" ]; then
+        show_dns_help
+        select_dns_provider
+        local dns_result=$?
+        if [ $dns_result -eq 2 ]; then
+            print_color $LATTE "已取消 DNS 提供商选择，返回主菜单"
+            return 0
+        elif [ $dns_result -ne 0 ]; then
+            print_color $ESPRESSO "DNS 凭据验证失败，请重新配置"
+            return 1
+        fi
+    fi
+    
+    # 4. 输入域名信息
     read -p "请输入主域名（例如：example.com）: " main_domain
     
     # 验证域名格式
@@ -294,7 +366,7 @@ auto_deploy() {
         print_color $BROWN "将为以下域名签发证书: $domains"
     fi
     
-    # 4. 选择证书类型
+    # 5. 选择证书类型
     print_color $BROWN "请选择证书类型："
     echo "1) RSA (默认，兼容性好)"
     echo "2) ECC (更安全，体积小)"
@@ -313,7 +385,7 @@ auto_deploy() {
             ;;
     esac
     
-    # 5. 选择证书颁发机构
+    # 6. 选择证书颁发机构
     print_color $BROWN "请选择证书颁发机构："
     echo "1) Let's Encrypt (默认)"
     echo "2) ZeroSSL"
@@ -337,20 +409,41 @@ auto_deploy() {
     
     print_color $MATCHA "使用证书颁发机构: $CA_NAME"
     
-    # 6. 签发证书
+    # 7. 签发证书
     print_color $BROWN "开始签发${CERT_TYPE}证书..."
     
     cd $ACME_INSTALL_DIR
     
     for domain in $domains; do
         print_color $LATTE "正在为域名 $domain 签发证书..."
-        print_color $BROWN "使用的DNS提供商: $DNS_PROVIDER"
-        
-        # 执行签发命令
-        if [ "$CERT_TYPE" = "ECC" ]; then
-            ./acme.sh --issue --dns $DNS_PROVIDER -d "$domain" --keylength ec-256 $CA_SERVER
+        if [ "$VERIFY_METHOD" = "dns" ]; then
+            print_color $BROWN "验证方式: DNS（$DNS_PROVIDER）"
         else
-            ./acme.sh --issue --dns $DNS_PROVIDER -d "$domain" --keylength 2048 $CA_SERVER
+            print_color $BROWN "验证方式: HTTP（$HTTP_MODE）"
+        fi
+        
+        # 根据验证方式执行签发命令
+        if [ "$VERIFY_METHOD" = "dns" ]; then
+            if [ "$CERT_TYPE" = "ECC" ]; then
+                ./acme.sh --issue --dns $DNS_PROVIDER -d "$domain" --keylength ec-256 $CA_SERVER
+            else
+                ./acme.sh --issue --dns $DNS_PROVIDER -d "$domain" --keylength 2048 $CA_SERVER
+            fi
+        else
+            # HTTP 验证：Standalone 或 Webroot
+            if [ "$CERT_TYPE" = "ECC" ]; then
+                if [ "$HTTP_MODE" = "standalone" ]; then
+                    ./acme.sh --issue --standalone -d "$domain" --keylength ec-256 $CA_SERVER
+                else
+                    ./acme.sh --issue -d "$domain" -w "$WEBROOT_PATH" --keylength ec-256 $CA_SERVER
+                fi
+            else
+                if [ "$HTTP_MODE" = "standalone" ]; then
+                    ./acme.sh --issue --standalone -d "$domain" --keylength 2048 $CA_SERVER
+                else
+                    ./acme.sh --issue -d "$domain" -w "$WEBROOT_PATH" --keylength 2048 $CA_SERVER
+                fi
+            fi
         fi
         
         if [ $? -eq 0 ]; then
@@ -391,8 +484,17 @@ auto_deploy() {
         else
             print_color $ESPRESSO "域名 $domain 证书签发失败！"
             print_color $LATTE "请检查："
-            echo "1. DNS API凭据是否正确"
-            echo "2. 域名解析是否生效"
+            if [ "$VERIFY_METHOD" = "dns" ]; then
+                echo "1. DNS API 凭据是否正确"
+                echo "2. 域名解析是否生效"
+            else
+                echo "1. 域名是否已解析到本机（HTTP 验证需从外网可访问 http://域名/.well-known/acme-challenge/）"
+                if [ "$HTTP_MODE" = "standalone" ]; then
+                    echo "2. 80 端口是否已被占用（签发时请暂时关闭 Nginx/Apache 等）"
+                else
+                    echo "2. 网站根目录 $WEBROOT_PATH 是否可写、Web 服务是否已运行"
+                fi
+            fi
             echo "3. 网络连接是否正常"
         fi
         echo "--------------------------------------"
