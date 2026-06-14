@@ -106,6 +106,39 @@ install_acme() {
 
 # 选择DNS提供商
 select_dns_provider() {
+    local configured_provider
+    configured_provider=$(detect_configured_dns_provider)
+    if [ -n "$configured_provider" ]; then
+        while true; do
+            print_color $BROWN "检测到可用的 DNS 环境配置：$(dns_provider_display_name "$configured_provider")（$configured_provider）"
+            echo "1) 使用当前环境配置（默认）"
+            echo "2) 手动选择/重新输入 DNS 提供商"
+            echo "0) ↩️ 返回上一级"
+            read -p "请输入选择 [0-2，默认 1]: " env_dns_choice
+
+            case ${env_dns_choice:-1} in
+                0)
+                    print_color $LATTE "返回主菜单..."
+                    return 2
+                    ;;
+                1)
+                    DNS_PROVIDER="$configured_provider"
+                    export DNS_PROVIDER
+                    print_color $MATCHA "已使用当前环境配置：$(dns_provider_display_name "$DNS_PROVIDER")"
+                    validate_dns_credentials
+                    return $?
+                    ;;
+                2)
+                    break
+                    ;;
+                *)
+                    print_color $ESPRESSO "无效选择！请输入 0-2 之间的数字"
+                    echo ""
+                    ;;
+            esac
+        done
+    fi
+
     while true; do
 		print_color $BROWN "请选择DNS提供商："
 		echo "1) Cloudflare"
@@ -193,6 +226,7 @@ select_dns_provider() {
 	done
     
     # 验证必要的环境变量是否设置
+    export DNS_PROVIDER
     validate_dns_credentials
 }
 
@@ -237,6 +271,94 @@ validate_dns_credentials() {
             ;;
     esac
     return 0
+}
+
+# 获取 DNS 提供商的显示名称
+dns_provider_display_name() {
+    case "$1" in
+        dns_cf) echo "Cloudflare" ;;
+        dns_ali) echo "Alibaba Cloud (阿里云)" ;;
+        dns_tencent) echo "Tencent Cloud (腾讯云)" ;;
+        dns_dp) echo "DNSPod" ;;
+        dns_huaweicloud) echo "Huawei Cloud (华为云)" ;;
+        dns_jd) echo "JD Cloud (京东云)" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+# 检查指定 DNS 提供商所需的环境变量是否已配置
+has_dns_env_credentials() {
+    case "$1" in
+        dns_cf)
+            [ -n "$CF_Key" ] && [ -n "$CF_Email" ]
+            ;;
+        dns_ali)
+            [ -n "$Ali_Key" ] && [ -n "$Ali_Secret" ]
+            ;;
+        dns_tencent)
+            [ -n "$Tencent_SecretId" ] && [ -n "$Tencent_SecretKey" ]
+            ;;
+        dns_dp)
+            [ -n "$DP_Id" ] && [ -n "$DP_Key" ]
+            ;;
+        dns_huaweicloud)
+            [ -n "$HUAWEICLOUD_Username" ] && [ -n "$HUAWEICLOUD_Password" ]
+            ;;
+        dns_jd)
+            [ -n "$JD_ACCESS_KEY_ID" ] && [ -n "$JD_ACCESS_KEY_SECRET" ]
+            ;;
+        *)
+            [ -n "$1" ]
+            ;;
+    esac
+}
+
+# 优先使用当前 shell 中已经配置好的 DNS 环境变量
+detect_configured_dns_provider() {
+    local provider
+    local detected_provider=""
+    local detected_count=0
+
+    if [ -n "$DNS_PROVIDER" ] && has_dns_env_credentials "$DNS_PROVIDER"; then
+        echo "$DNS_PROVIDER"
+        return 0
+    fi
+
+    for provider in dns_cf dns_ali dns_tencent dns_dp dns_huaweicloud dns_jd; do
+        if has_dns_env_credentials "$provider"; then
+            detected_provider="$provider"
+            detected_count=$((detected_count + 1))
+        fi
+    done
+
+    if [ "$detected_count" -eq 1 ]; then
+        echo "$detected_provider"
+        return 0
+    fi
+
+    return 1
+}
+
+# acme.sh 的续期依赖 cron 任务；默认开启，用户可在签发流程中选择关闭。
+configure_auto_renew() {
+    if [ "${ENABLE_AUTO_RENEW:-1}" != "1" ]; then
+        print_color $LATTE "已按选择跳过自动续期配置"
+        return 0
+    fi
+
+    if [ ! -x "./acme.sh" ]; then
+        print_color $ESPRESSO "未找到可执行的 acme.sh，无法配置自动续期"
+        return 1
+    fi
+
+    ./acme.sh --install-cronjob >/dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        print_color $MATCHA "已开启自动续期（acme.sh cron 任务）"
+        return 0
+    fi
+
+    print_color $LATTE "自动续期任务配置失败，请稍后手动执行：$ACME_INSTALL_DIR/acme.sh --install-cronjob"
+    return 1
 }
 
 # 显示DNS提供商帮助信息
@@ -402,17 +524,28 @@ auto_deploy() {
             CA_NAME="Buypass"
             ;;
         *)
-            CA_SERVER=""
+            CA_SERVER="--server letsencrypt"
             CA_NAME="Let's Encrypt"
             ;;
     esac
     
     print_color $MATCHA "使用证书颁发机构: $CA_NAME"
+
+    # 7. 自动续期配置（默认开启）
+    ENABLE_AUTO_RENEW=1
+    read -p "是否开启自动续期？[Y/n]: " auto_renew_choice
+    if [[ $auto_renew_choice =~ ^[Nn]$ ]]; then
+        ENABLE_AUTO_RENEW=0
+        print_color $LATTE "本次将不会配置自动续期"
+    else
+        print_color $MATCHA "将默认开启自动续期"
+    fi
     
-    # 7. 签发证书
+    # 8. 签发证书
     print_color $BROWN "开始签发${CERT_TYPE}证书..."
     
     cd $ACME_INSTALL_DIR
+    local auto_renew_configured=0
     
     for domain in $domains; do
         print_color $LATTE "正在为域名 $domain 签发证书..."
@@ -480,6 +613,11 @@ auto_deploy() {
             echo ""
             print_color $BROWN "证书信息："
             ./acme.sh --info -d "$domain"
+
+            if [ "$auto_renew_configured" -eq 0 ]; then
+                configure_auto_renew
+                auto_renew_configured=1
+            fi
             
         else
             print_color $ESPRESSO "域名 $domain 证书签发失败！"
