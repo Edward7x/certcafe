@@ -375,6 +375,8 @@ rm -rf ~/.acme.sh
 附加域名: *.example.com
 ```
 
+脚本会将主域名和附加域名一起提交给 acme.sh，签发为同一张包含 `example.com` 和 `*.example.com` 的证书。
+
 ### 多域名证书
 
 一次签发包含多个域名的证书：
