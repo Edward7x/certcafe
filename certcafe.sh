@@ -78,6 +78,43 @@ check_acme_installed() {
     fi
 }
 
+is_valid_email() {
+    [[ "$1" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]
+}
+
+prompt_acme_account_email() {
+    local required="${1:-0}"
+    local email_input
+
+    if [ -n "$ACME_ACCOUNT_EMAIL" ] && is_valid_email "$ACME_ACCOUNT_EMAIL"; then
+        return 0
+    fi
+
+    while true; do
+        if [ "$required" = "1" ]; then
+            read -p "请输入用于注册 ACME/ZeroSSL 账户的邮箱: " email_input
+        else
+            read -p "请输入用于注册 ACME 账户的邮箱（可留空跳过）: " email_input
+        fi
+
+        if [ -z "$email_input" ]; then
+            if [ "$required" = "1" ]; then
+                print_color $ESPRESSO "ZeroSSL 需要有效邮箱才能注册账户"
+                continue
+            fi
+            return 0
+        fi
+
+        if is_valid_email "$email_input"; then
+            ACME_ACCOUNT_EMAIL="$email_input"
+            export ACME_ACCOUNT_EMAIL
+            return 0
+        fi
+
+        print_color $ESPRESSO "邮箱格式不正确，请重新输入"
+    done
+}
+
 # 安装acme.sh
 install_acme() {
     print_color $BROWN "开始安装acme.sh..."
@@ -86,9 +123,15 @@ install_acme() {
         print_color $LATTE "acme.sh已经安装，跳过安装步骤"
         return 0
     fi
+
+    prompt_acme_account_email 0
     
     # 下载并安装acme.sh
-    curl -s $ACME_URL | sh -s email=my@example.com
+    if [ -n "$ACME_ACCOUNT_EMAIL" ]; then
+        curl -s $ACME_URL | sh -s email="$ACME_ACCOUNT_EMAIL"
+    else
+        curl -s $ACME_URL | sh
+    fi
     
     if [ $? -eq 0 ]; then
         print_color $MATCHA "acme.sh安装成功！"
@@ -102,6 +145,22 @@ install_acme() {
         print_color $ESPRESSO "acme.sh安装失败！"
         return 1
     fi
+}
+
+register_zerossl_account() {
+    prompt_acme_account_email 1 || return 1
+
+    print_color $BROWN "正在注册/更新 ZeroSSL 账户邮箱: $ACME_ACCOUNT_EMAIL"
+    cd "$ACME_INSTALL_DIR" || return 1
+    ./acme.sh --register-account -m "$ACME_ACCOUNT_EMAIL" --server zerossl
+
+    if [ $? -eq 0 ]; then
+        print_color $MATCHA "ZeroSSL 账户邮箱已配置完成"
+        return 0
+    fi
+
+    print_color $ESPRESSO "ZeroSSL 账户注册失败，请检查邮箱或 acme.sh 输出信息"
+    return 1
 }
 
 # 选择DNS提供商
@@ -158,11 +217,7 @@ select_dns_provider() {
 				;;
 			1)
 				DNS_PROVIDER="dns_cf"
-				read -p "请输入Cloudflare API Key: " cf_key
-				read -p "请输入Cloudflare Email: " cf_email
-				export CF_Key="$cf_key"
-				export CF_Email="$cf_email"
-				print_color $MATCHA "已设置Cloudflare DNS提供商"
+				configure_cloudflare_credentials
 				break
 				;;
 			2)
@@ -234,8 +289,8 @@ select_dns_provider() {
 validate_dns_credentials() {
     case $DNS_PROVIDER in
         dns_cf)
-            if [ -z "$CF_Key" ] || [ -z "$CF_Email" ]; then
-                print_color $ESPRESSO "错误：Cloudflare API Key 或 Email 未设置"
+            if [ -z "$CF_Token" ] && { [ -z "$CF_Key" ] || [ -z "$CF_Email" ]; }; then
+                print_color $ESPRESSO "错误：Cloudflare API Token 未设置，或 Global API Key/Email 未设置"
                 return 1
             fi
             ;;
@@ -286,11 +341,57 @@ dns_provider_display_name() {
     esac
 }
 
+configure_cloudflare_credentials() {
+    local cf_auth_choice
+    local cf_key
+    local cf_email
+    local cf_token
+    local cf_zone_id
+    local cf_account_id
+
+    print_color $BROWN "请选择 Cloudflare API 凭据类型："
+    echo "1) API Token（推荐）：只授权指定域名的 DNS 管理权限，更安全"
+    echo "2) Global API Key + Email（不推荐）：账号级全局密钥，权限较大，仅用于旧版配置"
+    read -p "请输入选择 [1-2，默认 1]: " cf_auth_choice
+
+    case ${cf_auth_choice:-1} in
+        2)
+            print_color $LATTE "Global API Key 方式需要填写 Cloudflare 账号邮箱和全局 API Key。"
+            while [ -z "$cf_key" ]; do
+                read -p "请输入 Cloudflare Global API Key（必填）: " cf_key
+                [ -z "$cf_key" ] && print_color $ESPRESSO "Cloudflare Global API Key 不能为空"
+            done
+            while [ -z "$cf_email" ]; do
+                read -p "请输入 Cloudflare 账号邮箱（必填）: " cf_email
+                [ -z "$cf_email" ] && print_color $ESPRESSO "Cloudflare 账号邮箱不能为空"
+            done
+            export CF_Key="$cf_key"
+            export CF_Email="$cf_email"
+            unset CF_Token CF_Account_ID CF_Zone_ID
+            print_color $MATCHA "已设置 Cloudflare Global API Key 凭据"
+            ;;
+        *)
+            print_color $LATTE "API Token 至少需要 Zone:Read 和 DNS:Edit 权限，建议只授权当前要签发证书的域名。"
+            while [ -z "$cf_token" ]; do
+                read -p "请输入 Cloudflare API Token（必填）: " cf_token
+                [ -z "$cf_token" ] && print_color $ESPRESSO "Cloudflare API Token 不能为空"
+            done
+            read -p "请输入 Cloudflare Zone ID（可留空；推荐填写，填写后会直接操作该域名 Zone，避免自动识别失败）: " cf_zone_id
+            read -p "请输入 Cloudflare Account ID（可留空；仅当同一 Token 可访问多个账号时，用于限定账号范围）: " cf_account_id
+            export CF_Token="$cf_token"
+            export CF_Zone_ID="$cf_zone_id"
+            export CF_Account_ID="$cf_account_id"
+            unset CF_Key CF_Email
+            print_color $MATCHA "已设置 Cloudflare API Token 凭据"
+            ;;
+    esac
+}
+
 # 检查指定 DNS 提供商所需的环境变量是否已配置
 has_dns_env_credentials() {
     case "$1" in
         dns_cf)
-            [ -n "$CF_Key" ] && [ -n "$CF_Email" ]
+            [ -n "$CF_Token" ] || { [ -n "$CF_Key" ] && [ -n "$CF_Email" ]; }
             ;;
         dns_ali)
             [ -n "$Ali_Key" ] && [ -n "$Ali_Secret" ]
@@ -518,6 +619,9 @@ auto_deploy() {
         2)
             CA_SERVER="--server zerossl"
             CA_NAME="ZeroSSL"
+            if ! register_zerossl_account; then
+                return 1
+            fi
             ;;
         3)
             CA_SERVER="--server buypass"
@@ -546,9 +650,19 @@ auto_deploy() {
     
     cd $ACME_INSTALL_DIR
     local auto_renew_configured=0
+    local domain_args=()
+    local cert_domain
+
+    for cert_domain in $domains; do
+        if [[ "$cert_domain" == \*.* ]] && [ "$VERIFY_METHOD" != "dns" ]; then
+            print_color $ESPRESSO "泛域名 $cert_domain 必须使用 DNS 验证，HTTP 验证不支持泛域名"
+            return 1
+        fi
+        domain_args+=("-d" "$cert_domain")
+    done
     
-    for domain in $domains; do
-        print_color $LATTE "正在为域名 $domain 签发证书..."
+    for domain in "$main_domain"; do
+        print_color $LATTE "正在为以下域名签发同一张证书: $domains"
         if [ "$VERIFY_METHOD" = "dns" ]; then
             print_color $BROWN "验证方式: DNS（$DNS_PROVIDER）"
         else
@@ -558,23 +672,23 @@ auto_deploy() {
         # 根据验证方式执行签发命令
         if [ "$VERIFY_METHOD" = "dns" ]; then
             if [ "$CERT_TYPE" = "ECC" ]; then
-                ./acme.sh --issue --dns $DNS_PROVIDER -d "$domain" --keylength ec-256 $CA_SERVER
+                ./acme.sh --issue --dns $DNS_PROVIDER "${domain_args[@]}" --keylength ec-256 $CA_SERVER
             else
-                ./acme.sh --issue --dns $DNS_PROVIDER -d "$domain" --keylength 2048 $CA_SERVER
+                ./acme.sh --issue --dns $DNS_PROVIDER "${domain_args[@]}" --keylength 2048 $CA_SERVER
             fi
         else
             # HTTP 验证：Standalone 或 Webroot
             if [ "$CERT_TYPE" = "ECC" ]; then
                 if [ "$HTTP_MODE" = "standalone" ]; then
-                    ./acme.sh --issue --standalone -d "$domain" --keylength ec-256 $CA_SERVER
+                    ./acme.sh --issue --standalone "${domain_args[@]}" --keylength ec-256 $CA_SERVER
                 else
-                    ./acme.sh --issue -d "$domain" -w "$WEBROOT_PATH" --keylength ec-256 $CA_SERVER
+                    ./acme.sh --issue "${domain_args[@]}" -w "$WEBROOT_PATH" --keylength ec-256 $CA_SERVER
                 fi
             else
                 if [ "$HTTP_MODE" = "standalone" ]; then
-                    ./acme.sh --issue --standalone -d "$domain" --keylength 2048 $CA_SERVER
+                    ./acme.sh --issue --standalone "${domain_args[@]}" --keylength 2048 $CA_SERVER
                 else
-                    ./acme.sh --issue -d "$domain" -w "$WEBROOT_PATH" --keylength 2048 $CA_SERVER
+                    ./acme.sh --issue "${domain_args[@]}" -w "$WEBROOT_PATH" --keylength 2048 $CA_SERVER
                 fi
             fi
         fi
@@ -1097,7 +1211,7 @@ show_env_config() {
     fi
 
     echo "各 DNS 提供商凭据状态："
-    echo "  Cloudflare:    CF_Key=$([ -n "$CF_Key" ] && echo '***已设置***' || echo '（未设置）')  CF_Email=$([ -n "$CF_Email" ] && echo '***已设置***' || echo '（未设置）')"
+    echo "  Cloudflare:    CF_Token=$([ -n "$CF_Token" ] && echo '***已设置***' || echo '（未设置）')  CF_Zone_ID=$([ -n "$CF_Zone_ID" ] && echo '***已设置***' || echo '（未设置）')  CF_Account_ID=$([ -n "$CF_Account_ID" ] && echo '***已设置***' || echo '（未设置）')  CF_Key=$([ -n "$CF_Key" ] && echo '***已设置***' || echo '（未设置）')  CF_Email=$([ -n "$CF_Email" ] && echo '***已设置***' || echo '（未设置）')"
     echo "  阿里云:        Ali_Key=$([ -n "$Ali_Key" ] && echo '***已设置***' || echo '（未设置）')  Ali_Secret=$([ -n "$Ali_Secret" ] && echo '***已设置***' || echo '（未设置）')"
     echo "  腾讯云:        Tencent_SecretId=$([ -n "$Tencent_SecretId" ] && echo '***已设置***' || echo '（未设置）')  Tencent_SecretKey=$([ -n "$Tencent_SecretKey" ] && echo '***已设置***' || echo '（未设置）')"
     echo "  DNSPod:        DP_Id=$([ -n "$DP_Id" ] && echo '***已设置***' || echo '（未设置）')  DP_Key=$([ -n "$DP_Key" ] && echo '***已设置***' || echo '（未设置）')"

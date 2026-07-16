@@ -76,7 +76,10 @@ CertCafe 是一个优雅而强大的SSL证书管理工具，基于 acme.sh 构�
 
 1. **下载脚本**
 ```bash
-# 下载脚本
+# GitHub
+curl -fsSL -o certcafe.sh https://raw.githubusercontent.com/Edward7x/certcafe/master/certcafe.sh
+
+# Gitee（国内网络推荐）
 curl -O https://gitee.com/edward7x/certcafe/raw/master/certcafe.sh
 
 # 赋予执行权限
@@ -124,7 +127,7 @@ chmod +x certcafe.sh
 
 | 选项 | 提供商     | 所需凭据                         |
 | ---- | ---------- | -------------------------------- |
-| 1    | Cloudflare | API Key + Email                  |
+| 1    | Cloudflare | API Token（推荐）或 Global API Key + Email |
 | 2    | 阿里云     | AccessKey ID + Secret            |
 | 3    | 腾讯云     | SecretId + SecretKey             |
 | 4    | DNSPod     | ID + Key                         |
@@ -132,11 +135,14 @@ chmod +x certcafe.sh
 | 6    | 京东云     | AccessKey ID + Secret Access Key |
 | 7    | 其他       | 手动配置 dns_xxx 及对应环境变量  |
 
+如果当前 Shell 已经设置好 DNS 环境变量，脚本会优先检测并提示是否直接复用当前配置，避免重复输入凭据。
+
 #### 步骤3: 域名配置
 
 - **主域名**: 如 `example.com`
 - **附加域名**: 多个域名用空格分隔（支持通配符域名）
 - 示例: `example.com *.example.com www.example.com`
+- 主域名和附加域名会一起提交给 acme.sh，签发为同一张包含多个 SAN 的证书。
 
 #### 步骤4: 证书类型选择
 
@@ -149,7 +155,13 @@ chmod +x certcafe.sh
 - **ZeroSSL**: 免费，90天有效期
 - **Buypass**: 免费，180天有效期
 
-#### 步骤6: 自动安装
+选择 ZeroSSL 时，脚本会要求填写有效邮箱用于注册/更新 ZeroSSL 账户；安装 acme.sh 时也可以填写 ACME 账户邮箱，留空则跳过。
+
+#### 步骤6: 自动续期
+
+脚本默认开启 acme.sh 的 cron 自动续期任务；签发流程中可以选择关闭本次自动续期配置。
+
+#### 步骤7: 自动安装
 
 脚本会自动签发证书，并可选择安装到指定目录。
 
@@ -234,8 +246,9 @@ CertCafe 支持两种域名所有权验证方式：
 
 1. 登录 Cloudflare 控制台
 2. 进入 "My Profile" → "API Tokens"
-3. 创建具有 Zone:DNS:Edit 权限的令牌
-4. 或者使用 Global API Key
+3. 创建 API Token，至少包含 `Zone:Read` 和 `DNS:Edit` 权限，建议只授权需要签发证书的域名
+4. 可选填写 Zone ID，填写后脚本会直接操作指定 Zone，减少自动识别失败的概率
+5. 如需兼容旧配置，也可以使用 Global API Key + Email，但不推荐用于新配置
 
 ### 阿里云
 
@@ -375,6 +388,8 @@ rm -rf ~/.acme.sh
 附加域名: *.example.com
 ```
 
+脚本会将主域名和附加域名一起提交给 acme.sh，签发为同一张包含 `example.com` 和 `*.example.com` 的证书。
+
 ### 多域名证书
 
 一次签发包含多个域名的证书：
@@ -432,8 +447,13 @@ nslookup example.com
 CertCafe 自动配置证书续期：
 - 📅 自动检测证书有效期
 - 🔔 提前30天开始续期
-- 📧 可选邮件通知（需配置）
 - 📝 续期日志记录
+
+自动续期依赖 acme.sh 安装的 cron 任务。签发流程默认开启，也可以在提示时选择关闭；若自动配置失败，可手动执行：
+
+```bash
+~/.acme.sh/acme.sh --install-cronjob
+```
 
 ## 安全建议
 
