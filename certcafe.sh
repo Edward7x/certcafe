@@ -462,7 +462,7 @@ enable_auto_renew() {
     cd "$ACME_INSTALL_DIR" || return 1
     ./acme.sh --install-cronjob >/dev/null 2>&1
     if is_auto_renew_enabled; then
-        print_color $MATCHA "✅ 已开启自动续期（适用于全部证书）"
+        print_color $MATCHA "✅ 已开启全局自动续期任务（已单独暂停的域名保持暂停）"
         return 0
     fi
 
@@ -495,36 +495,153 @@ configure_auto_renew() {
     fi
 }
 
+list_domain_renew_status() {
+    local config
+    local domain
+    local cert_type
+    local status
+    local found=0
+
+    echo -e "${CREAM}当前证书的域名级续期状态：${NC}"
+    echo "======================================"
+    for config in "$ACME_INSTALL_DIR"/*/*.conf "$ACME_INSTALL_DIR"/*/*.conf.removed; do
+        [ -f "$config" ] || continue
+        found=1
+        domain=$(basename "$config")
+        domain=${domain%.removed}
+        domain=${domain%.conf}
+        cert_type="RSA"
+        if [[ "$(basename "$(dirname "$config")")" == *_ecc ]]; then
+            cert_type="ECC"
+        fi
+        if [[ "$config" == *.removed ]]; then
+            status="暂停"
+        else
+            status="启用"
+        fi
+        printf '  %-36s %-4s %s\n' "$domain" "$cert_type" "$status"
+    done
+    if [ "$found" -eq 0 ]; then
+        echo "  暂无可管理的证书"
+    fi
+    echo "======================================"
+}
+
+set_domain_auto_renew() {
+    local domain="$1"
+    local enabled="$2"
+    local cert_dir
+    local config_file
+    local removed_file
+    local found=0
+    local changed=0
+
+    if ! [[ "$domain" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        print_color $ESPRESSO "域名格式不正确，请输入证书的主域名"
+        return 1
+    fi
+
+    for cert_dir in "$ACME_INSTALL_DIR/$domain" "$ACME_INSTALL_DIR/${domain}_ecc"; do
+        config_file="$cert_dir/$domain.conf"
+        removed_file="$config_file.removed"
+        if [ -f "$config_file" ] || [ -f "$removed_file" ]; then
+            found=1
+        fi
+
+        if [ "$enabled" = "1" ] && [ -f "$removed_file" ]; then
+            if [ -f "$config_file" ]; then
+                print_color $ESPRESSO "配置冲突，启用文件与暂停文件同时存在：$cert_dir"
+                return 1
+            fi
+            mv "$removed_file" "$config_file" || return 1
+            changed=$((changed + 1))
+        elif [ "$enabled" = "0" ] && [ -f "$config_file" ]; then
+            if [ -f "$removed_file" ]; then
+                print_color $ESPRESSO "配置冲突，启用文件与暂停文件同时存在：$cert_dir"
+                return 1
+            fi
+            mv "$config_file" "$removed_file" || return 1
+            changed=$((changed + 1))
+        fi
+    done
+
+    if [ "$found" -eq 0 ]; then
+        print_color $ESPRESSO "未找到主域名为 $domain 的证书配置"
+        return 1
+    fi
+
+    if [ "$enabled" = "1" ]; then
+        if [ "$changed" -gt 0 ]; then
+            print_color $MATCHA "✅ 已启用 $domain 的自动续期（共 $changed 个证书类型）"
+        else
+            print_color $LATTE "$domain 的域名级自动续期已经处于启用状态"
+        fi
+        if ! is_auto_renew_enabled; then
+            print_color $LATTE "提示：全局续期任务当前关闭，需同时开启全局任务后才会实际自动续期"
+        fi
+    else
+        if [ "$changed" -gt 0 ]; then
+            print_color $MATCHA "✅ 已暂停 $domain 的自动续期（证书和私钥均已保留）"
+        else
+            print_color $LATTE "$domain 的域名级自动续期已经处于暂停状态"
+        fi
+    fi
+}
+
+manage_domain_auto_renew() {
+    local renew_domain
+    local domain_renew_choice
+
+    list_domain_renew_status
+    read -p "请输入要管理的证书主域名: " renew_domain
+    [ -n "$renew_domain" ] || { print_color $ESPRESSO "域名不能为空"; return 1; }
+
+    echo "1) 启用该域名自动续期"
+    echo "2) 暂停该域名自动续期（保留证书）"
+    echo "0) 返回"
+    read -p "请输入选择 [0-2]: " domain_renew_choice
+    case $domain_renew_choice in
+        1) set_domain_auto_renew "$renew_domain" 1 ;;
+        2) set_domain_auto_renew "$renew_domain" 0 ;;
+        0) return 0 ;;
+        *) print_color $ESPRESSO "无效选择"; return 1 ;;
+    esac
+}
+
 manage_auto_renew() {
     if ! check_acme_installed; then
         print_color $ESPRESSO "acme.sh未安装，请先执行一键安装部署！"
         return 1
     fi
 
-    print_color $BROWN "自动续期管理（全局设置）"
+    print_color $BROWN "自动续期管理"
     echo "======================================"
     if is_auto_renew_enabled; then
-        echo -e "当前状态: ${MATCHA}启用${NC}"
+        echo -e "全局续期任务: ${MATCHA}启用${NC}"
     else
-        echo -e "当前状态: ${LATTE}禁用${NC}"
+        echo -e "全局续期任务: ${LATTE}禁用${NC}"
     fi
-    echo "acme.sh 的 cron 任务会统一管理全部证书。"
-    echo "1) 开启自动续期"
-    echo "2) 关闭自动续期（保留所有证书）"
+    echo "全局任务是总开关；域名级开关可单独暂停指定证书。"
+    echo "1) 开启全局自动续期"
+    echo "2) 关闭全局自动续期（保留全部证书）"
+    echo "3) 指定域名管理自动续期"
     echo "0) 返回上一级菜单"
-    read -p "请输入选择 [0-2]: " auto_renew_manage_choice
+    read -p "请输入选择 [0-3]: " auto_renew_manage_choice
 
     case $auto_renew_manage_choice in
         1)
             enable_auto_renew
             ;;
         2)
-            read -p "确定关闭全部证书的自动续期吗？[y/N]: " confirm_disable_renew
+            read -p "确定关闭全部证书的全局自动续期任务吗？[y/N]: " confirm_disable_renew
             if [[ $confirm_disable_renew =~ ^[Yy]$ ]]; then
                 disable_auto_renew
             else
                 print_color $LATTE "操作已取消"
             fi
+            ;;
+        3)
+            manage_domain_auto_renew
             ;;
         0)
             return 0
@@ -1476,6 +1593,7 @@ check_cert_status() {
     
     local cert_count=0
     local renew_count=0
+    local paused_count=0
     local expiring_count=0
     local auto_renew_enabled=0
     if is_auto_renew_enabled; then
@@ -1486,7 +1604,11 @@ check_cert_status() {
     echo -e "${CREAM}扫描证书目录...${NC}"
     for item in "$ACME_INSTALL_DIR"/*; do
         if [ -d "$item" ]; then
-            local domain=$(basename "$item")
+            local cert_dir_name=$(basename "$item")
+            local domain="$cert_dir_name"
+            if [[ "$cert_dir_name" == *_ecc ]]; then
+                domain=${cert_dir_name%_ecc}
+            fi
             # 检查是否是有效的证书目录（包含证书文件）
             if [ -f "$item/fullchain.cer" ] || [ -f "$item/$domain.key" ]; then
                 cert_count=$((cert_count + 1))
@@ -1517,12 +1639,17 @@ check_cert_status() {
                     fi
                 fi
                 
-                # acme.sh 的 cron 是全局任务，会续期全部受管理的证书。
-                if [ "$auto_renew_enabled" -eq 1 ]; then
+                # 全局 cron 是总开关，域名配置文件决定该证书是否加入续期列表。
+                if [ -f "$item/$domain.conf.removed" ]; then
+                    echo -e "  ⏸️  自动续期: ${LATTE}域名已暂停${NC}"
+                    paused_count=$((paused_count + 1))
+                elif [ -f "$item/$domain.conf" ] && [ "$auto_renew_enabled" -eq 1 ]; then
                     echo -e "  🔄 自动续期: ${MATCHA}启用${NC}"
                     renew_count=$((renew_count + 1))
+                elif [ -f "$item/$domain.conf" ]; then
+                    echo -e "  ⏸️  自动续期: ${LATTE}全局任务已关闭${NC}"
                 else
-                    echo -e "  ⏸️  自动续期: ${LATTE}禁用${NC}"
+                    echo -e "  ⚠️  自动续期: ${ESPRESSO}未找到续期配置${NC}"
                 fi
                 
                 echo ""
@@ -1543,8 +1670,9 @@ check_cert_status() {
         else
             echo -e "  全局续期任务: ${LATTE}未安装${NC}"
         fi
-        echo -e "  自动续期: ${MATCHA}$renew_count${NC}"
-        echo -e "  禁用续期: ${LATTE}$((cert_count - renew_count))${NC}"
+        echo -e "  实际自动续期: ${MATCHA}$renew_count${NC}"
+        echo -e "  域名级暂停: ${LATTE}$paused_count${NC}"
+        echo -e "  当前未续期: ${LATTE}$((cert_count - renew_count))${NC}"
         if [ $expiring_count -gt 0 ]; then
             echo -e "  即将过期: ${ESPRESSO}$expiring_count${NC}"
         fi
