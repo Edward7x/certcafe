@@ -24,8 +24,13 @@
 # ======================================
 
 SCRIPT_NAME="CertCafe"
+SCRIPT_PATH=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
 ACME_INSTALL_DIR="$HOME/.acme.sh"
 ACME_URL="https://get.acme.sh"
+CERTCAFE_CONFIG_DIR="$HOME/.certcafe"
+MONITOR_CONFIG_FILE="$CERTCAFE_CONFIG_DIR/monitor.conf"
+MONITOR_STATE_DIR="$CERTCAFE_CONFIG_DIR/monitor-state"
+MONITOR_CRON_MARKER="# CertCafe certificate expiry monitor"
 
 # 咖啡馆主题颜色
 BROWN='\033[0;33m'
@@ -1108,26 +1113,352 @@ manual_cleanup() {
     print_color $MATCHA "手动清理完成"
 }
 
+# 查找 acme.sh 安装目录
+find_acme_path() {
+    local paths=(
+        "$HOME/.acme.sh"
+        "/root/.acme.sh"
+        "/usr/local/share/acme.sh"
+        "$(dirname "$(command -v acme.sh 2>/dev/null)" 2>/dev/null)"
+    )
+    local path
+
+    for path in "${paths[@]}"; do
+        if [ -f "$path/acme.sh" ]; then
+            echo "$path"
+            return 0
+        fi
+    done
+    return 1
+}
+
+load_monitor_config() {
+    ALERT_DAYS=30
+    TELEGRAM_ENABLED=0
+    TELEGRAM_BOT_TOKEN=""
+    TELEGRAM_CHAT_ID=""
+    EMAIL_ENABLED=0
+    SMTP_URL=""
+    SMTP_USER=""
+    SMTP_PASSWORD=""
+    EMAIL_FROM=""
+    EMAIL_TO=""
+
+    if [ -f "$MONITOR_CONFIG_FILE" ]; then
+        # 配置由 CertCafe 创建且仅当前用户可读。
+        # shellcheck disable=SC1090
+        . "$MONITOR_CONFIG_FILE"
+    fi
+}
+
+save_monitor_config() {
+    mkdir -p "$CERTCAFE_CONFIG_DIR" "$MONITOR_STATE_DIR" || return 1
+    umask 077
+    {
+        printf 'ALERT_DAYS=%q\n' "$ALERT_DAYS"
+        printf 'TELEGRAM_ENABLED=%q\n' "$TELEGRAM_ENABLED"
+        printf 'TELEGRAM_BOT_TOKEN=%q\n' "$TELEGRAM_BOT_TOKEN"
+        printf 'TELEGRAM_CHAT_ID=%q\n' "$TELEGRAM_CHAT_ID"
+        printf 'EMAIL_ENABLED=%q\n' "$EMAIL_ENABLED"
+        printf 'SMTP_URL=%q\n' "$SMTP_URL"
+        printf 'SMTP_USER=%q\n' "$SMTP_USER"
+        printf 'SMTP_PASSWORD=%q\n' "$SMTP_PASSWORD"
+        printf 'EMAIL_FROM=%q\n' "$EMAIL_FROM"
+        printf 'EMAIL_TO=%q\n' "$EMAIL_TO"
+    } > "$MONITOR_CONFIG_FILE"
+    chmod 600 "$MONITOR_CONFIG_FILE"
+}
+
+send_telegram_alert() {
+    local message="$1"
+    local response
+
+    [ "$TELEGRAM_ENABLED" = "1" ] || return 2
+    if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+        echo "Telegram 配置不完整" >&2
+        return 1
+    fi
+
+    response=$(curl -fsS --max-time 20 \
+        --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
+        --data-urlencode "text=$message" \
+        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" 2>/dev/null) || return 1
+    echo "$response" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'
+}
+
+send_email_alert() {
+    local subject="$1"
+    local message="$2"
+    local mail_file
+    local encoded_subject
+
+    [ "$EMAIL_ENABLED" = "1" ] || return 2
+    if [ -z "$SMTP_URL" ] || [ -z "$EMAIL_FROM" ] || [ -z "$EMAIL_TO" ]; then
+        echo "邮箱配置不完整" >&2
+        return 1
+    fi
+
+    mail_file=$(mktemp) || return 1
+    encoded_subject=$(printf '%s' "$subject" | base64 | tr -d '\r\n')
+    {
+        printf 'From: %s\r\n' "$EMAIL_FROM"
+        printf 'To: %s\r\n' "$EMAIL_TO"
+        printf 'Subject: =?UTF-8?B?%s?=\r\n' "$encoded_subject"
+        printf 'Content-Type: text/plain; charset=UTF-8\r\n'
+        printf '\r\n%s\r\n' "$message"
+    } > "$mail_file"
+
+    local curl_args=(--fail --silent --show-error --max-time 30 --ssl-reqd --url "$SMTP_URL" --mail-from "$EMAIL_FROM" --mail-rcpt "$EMAIL_TO" --upload-file "$mail_file")
+    if [ -n "$SMTP_USER" ]; then
+        curl_args+=(--user "$SMTP_USER:$SMTP_PASSWORD")
+    fi
+    curl "${curl_args[@]}"
+    local result=$?
+    rm -f "$mail_file"
+    return $result
+}
+
+send_monitor_notification() {
+    local subject="$1"
+    local message="$2"
+    local formatted_message
+    local configured=0
+    local succeeded=0
+    printf -v formatted_message '%b' "$message"
+
+    if [ "$TELEGRAM_ENABLED" = "1" ]; then
+        configured=$((configured + 1))
+        if send_telegram_alert "$subject
+
+$formatted_message"; then
+            succeeded=$((succeeded + 1))
+        else
+            echo "Telegram 告警发送失败" >&2
+        fi
+    fi
+    if [ "$EMAIL_ENABLED" = "1" ]; then
+        configured=$((configured + 1))
+        if send_email_alert "$subject" "$formatted_message"; then
+            succeeded=$((succeeded + 1))
+        else
+            echo "邮箱告警发送失败" >&2
+        fi
+    fi
+
+    [ "$configured" -gt 0 ] && [ "$succeeded" -gt 0 ]
+}
+
+check_expiry_alerts() {
+    load_monitor_config
+    local found_dir
+    found_dir=$(find_acme_path)
+    if [ -z "$found_dir" ]; then
+        echo "CertCafe 告警检查失败：未找到 acme.sh" >&2
+        return 1
+    fi
+    if ! [[ "$ALERT_DAYS" =~ ^[0-9]+$ ]]; then
+        echo "CertCafe 告警检查失败：ALERT_DAYS 必须是非负整数" >&2
+        return 1
+    fi
+    if [ "$TELEGRAM_ENABLED" != "1" ] && [ "$EMAIL_ENABLED" != "1" ]; then
+        echo "CertCafe 告警检查跳过：未启用通知渠道" >&2
+        return 1
+    fi
+
+    mkdir -p "$MONITOR_STATE_DIR" || return 1
+    local current_epoch
+    current_epoch=$(date +%s)
+    local alert_count=0
+    local failure_count=0
+    local item domain cert_file expiry expiry_epoch days_left state_key state_file telegram_state email_state message formatted_message telegram_message subject
+
+    for item in "$found_dir"/*; do
+        [ -d "$item" ] || continue
+        domain=$(basename "$item")
+        cert_file="$item/fullchain.cer"
+        [ -f "$cert_file" ] || continue
+        expiry=$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | cut -d= -f2)
+        expiry_epoch=$(date -d "$expiry" +%s 2>/dev/null) || continue
+        days_left=$(( (expiry_epoch - current_epoch) / 86400 ))
+        [ "$days_left" -le "$ALERT_DAYS" ] || continue
+
+        state_key=$(printf '%s' "$domain" | tr -c 'A-Za-z0-9._-' '_')
+        state_file="$MONITOR_STATE_DIR/$state_key"
+        telegram_state=""
+        email_state=""
+        [ -f "$state_file.telegram" ] && telegram_state=$(cat "$state_file.telegram")
+        [ -f "$state_file.email" ] && email_state=$(cat "$state_file.email")
+        if { [ "$TELEGRAM_ENABLED" != "1" ] || [ "$telegram_state" = "$expiry_epoch" ]; } \
+            && { [ "$EMAIL_ENABLED" != "1" ] || [ "$email_state" = "$expiry_epoch" ]; }; then
+            continue
+        fi
+
+        if [ "$days_left" -lt 0 ]; then
+            subject="[CertCafe] 证书已过期：$domain"
+            message="证书 $domain 已过期 $((-days_left)) 天。\n过期时间：$expiry\n检测主机：$(hostname)"
+        else
+            subject="[CertCafe] 证书即将到期：$domain"
+            message="证书 $domain 将在 $days_left 天后到期。\n过期时间：$expiry\n告警阈值：$ALERT_DAYS 天\n检测主机：$(hostname)"
+        fi
+
+        printf -v formatted_message '%b' "$message"
+        printf -v telegram_message '%s\n\n%s' "$subject" "$formatted_message"
+
+        if [ "$TELEGRAM_ENABLED" = "1" ] && [ "$telegram_state" != "$expiry_epoch" ]; then
+            if send_telegram_alert "$telegram_message"; then
+                printf '%s\n' "$expiry_epoch" > "$state_file.telegram"
+                alert_count=$((alert_count + 1))
+            else
+                echo "Telegram 告警发送失败: $domain" >&2
+                failure_count=$((failure_count + 1))
+            fi
+        fi
+        if [ "$EMAIL_ENABLED" = "1" ] && [ "$email_state" != "$expiry_epoch" ]; then
+            if send_email_alert "$subject" "$formatted_message"; then
+                printf '%s\n' "$expiry_epoch" > "$state_file.email"
+                alert_count=$((alert_count + 1))
+            else
+                echo "邮箱告警发送失败: $domain" >&2
+                failure_count=$((failure_count + 1))
+            fi
+        fi
+    done
+
+    echo "CertCafe 到期检查完成：已发送 $alert_count 条告警，失败 $failure_count 条"
+    [ "$failure_count" -eq 0 ]
+}
+
+is_monitor_cron_enabled() {
+    crontab -l 2>/dev/null | grep -Fq "$MONITOR_CRON_MARKER"
+}
+
+install_monitor_cron() {
+    local cron_command existing
+    printf -v cron_command '%q --check-alerts' "$SCRIPT_PATH"
+    existing=$(crontab -l 2>/dev/null | grep -Fv "$MONITOR_CRON_MARKER" || true)
+    {
+        [ -n "$existing" ] && printf '%s\n' "$existing"
+        printf '15 9 * * * /usr/bin/env bash %s >/dev/null 2>&1 %s\n' "$cron_command" "$MONITOR_CRON_MARKER"
+    } | crontab -
+    is_monitor_cron_enabled
+}
+
+uninstall_monitor_cron() {
+    local existing
+    existing=$(crontab -l 2>/dev/null | grep -Fv "$MONITOR_CRON_MARKER" || true)
+    printf '%s\n' "$existing" | crontab -
+    ! is_monitor_cron_enabled
+}
+
+configure_telegram_alert() {
+    load_monitor_config
+    read -p "请输入 Telegram Bot Token（留空保留当前值）: " telegram_token_input
+    read -p "请输入 Telegram Chat ID（留空保留当前值）: " telegram_chat_input
+    [ -n "$telegram_token_input" ] && TELEGRAM_BOT_TOKEN="$telegram_token_input"
+    [ -n "$telegram_chat_input" ] && TELEGRAM_CHAT_ID="$telegram_chat_input"
+    if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+        print_color $ESPRESSO "Bot Token 和 Chat ID 均不能为空"
+        return 1
+    fi
+    TELEGRAM_ENABLED=1
+    save_monitor_config && print_color $MATCHA "Telegram 告警已启用"
+}
+
+configure_email_alert() {
+    load_monitor_config
+    echo "SMTP URL 示例：smtps://smtp.example.com:465 或 smtp://smtp.example.com:587"
+    read -p "请输入 SMTP URL（留空保留当前值）: " smtp_url_input
+    read -p "请输入 SMTP 用户名（留空保留当前值）: " smtp_user_input
+    read -s -p "请输入 SMTP 密码/授权码（留空保留当前值）: " smtp_password_input
+    echo ""
+    read -p "请输入发件邮箱（留空保留当前值）: " email_from_input
+    read -p "请输入收件邮箱（留空保留当前值）: " email_to_input
+    [ -n "$smtp_url_input" ] && SMTP_URL="$smtp_url_input"
+    [ -n "$smtp_user_input" ] && SMTP_USER="$smtp_user_input"
+    [ -n "$smtp_password_input" ] && SMTP_PASSWORD="$smtp_password_input"
+    [ -n "$email_from_input" ] && EMAIL_FROM="$email_from_input"
+    [ -n "$email_to_input" ] && EMAIL_TO="$email_to_input"
+    if [ -z "$SMTP_URL" ] || [ -z "$EMAIL_FROM" ] || [ -z "$EMAIL_TO" ]; then
+        print_color $ESPRESSO "SMTP URL、发件邮箱和收件邮箱不能为空"
+        return 1
+    fi
+    EMAIL_ENABLED=1
+    save_monitor_config && print_color $MATCHA "邮箱告警已启用"
+}
+
+test_monitor_alerts() {
+    load_monitor_config
+    local subject="[CertCafe] 到期监控测试"
+    local message="这是一条 CertCafe 测试告警。\n检测主机：$(hostname)\n发送时间：$(date '+%F %T %Z')"
+    if send_monitor_notification "$subject" "$message"; then
+        print_color $MATCHA "测试告警已发送，请检查已启用的通知渠道"
+    else
+        print_color $ESPRESSO "测试告警发送失败，请检查配置和网络"
+        return 1
+    fi
+}
+
+manage_expiry_monitor() {
+    load_monitor_config
+    print_color $BROWN "证书到期监控告警"
+    echo "======================================"
+    echo "告警阈值: $ALERT_DAYS 天"
+    echo "Telegram: $([ "$TELEGRAM_ENABLED" = "1" ] && echo '启用' || echo '禁用')"
+    echo "邮箱: $([ "$EMAIL_ENABLED" = "1" ] && echo '启用' || echo '禁用')"
+    echo "每日监控任务: $(is_monitor_cron_enabled && echo '启用（每天 09:15）' || echo '禁用')"
+    echo "1) 设置告警阈值"
+    echo "2) 配置/启用 Telegram"
+    echo "3) 配置/启用邮箱"
+    echo "4) 禁用 Telegram"
+    echo "5) 禁用邮箱"
+    echo "6) 安装每日监控任务"
+    echo "7) 移除每日监控任务"
+    echo "8) 立即检测到期证书"
+    echo "9) 发送测试告警"
+    echo "0) 返回"
+    read -p "请输入选择 [0-9]: " monitor_choice
+
+    case $monitor_choice in
+        1)
+            read -p "提前多少天告警？[默认 30]: " alert_days_input
+            alert_days_input=${alert_days_input:-30}
+            if [[ "$alert_days_input" =~ ^[0-9]+$ ]]; then
+                ALERT_DAYS="$alert_days_input"
+                save_monitor_config && print_color $MATCHA "告警阈值已更新为 $ALERT_DAYS 天"
+            else
+                print_color $ESPRESSO "请输入非负整数"
+                return 1
+            fi
+            ;;
+        2) configure_telegram_alert ;;
+        3) configure_email_alert ;;
+        4) TELEGRAM_ENABLED=0; save_monitor_config; print_color $MATCHA "Telegram 告警已禁用" ;;
+        5) EMAIL_ENABLED=0; save_monitor_config; print_color $MATCHA "邮箱告警已禁用" ;;
+        6)
+            if install_monitor_cron; then
+                print_color $MATCHA "每日到期监控任务已安装（每天 09:15）"
+            else
+                print_color $ESPRESSO "每日监控任务安装失败"
+                return 1
+            fi
+            ;;
+        7)
+            if uninstall_monitor_cron; then
+                print_color $MATCHA "每日到期监控任务已移除"
+            else
+                print_color $ESPRESSO "每日监控任务移除失败"
+                return 1
+            fi
+            ;;
+        8) check_expiry_alerts ;;
+        9) test_monitor_alerts ;;
+        0) return 0 ;;
+        *) print_color $ESPRESSO "无效选择"; return 1 ;;
+    esac
+}
 # 证书状态检查
 check_cert_status() {
-    # 动态查找acme.sh路径
-    find_acme_path() {
-        local paths=(
-            "$HOME/.acme.sh"
-            "/root/.acme.sh" 
-            "/usr/local/share/acme.sh"
-            "$(dirname "$(which acme.sh 2>/dev/null)" 2>/dev/null)"
-        )
-        
-        for path in "${paths[@]}"; do
-            if [ -f "$path/acme.sh" ]; then
-                echo "$path"
-                return 0
-            fi
-        done
-        return 1
-    }
-    
+
     # 查找acme.sh安装目录
     local found_dir=$(find_acme_path)
     if [ -z "$found_dir" ]; then
@@ -1268,6 +1599,7 @@ show_menu() {
 	echo "7) 证书状态报告"
 	echo "8) 自动续期管理"
 	echo "9) 查看当前配置的环境变量"
+	echo "10) 证书到期监控告警"
 	echo "0) 退出"
     echo ""
 }
@@ -1285,7 +1617,7 @@ goodbye_from_cafe() {
 main() {
     while true; do
         show_menu
-        read -p "请选择操作 [0-9]: " choice
+        read -p "请选择操作 [0-10]: " choice
         
         case $choice in
 			0)
@@ -1320,6 +1652,9 @@ main() {
             9)
                 show_env_config
                 ;;
+            10)
+                manage_expiry_monitor
+                ;;
             *)
                 print_color $ESPRESSO "无效选择，请重新输入！"
                 ;;
@@ -1329,6 +1664,12 @@ main() {
         read -p "按回车键继续..."
     done
 }
+
+# 非交互监控入口，供 cron 调用。
+if [ "${1:-}" = "--check-alerts" ]; then
+    check_expiry_alerts
+    exit $?
+fi
 
 # 脚本启动
 if [ "$(id -u)" -eq 0 ]; then
