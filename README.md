@@ -2,6 +2,8 @@
 
 ![CertCafe Logo](https://img.shields.io/badge/CertCafe-v1.0-brown?style=for-the-badge&logo=coffeescript&logoColor=white)
 
+**简体中文** | [English](README_EN.md)
+
 > ☕ 一杯香浓的SSL证书解决方案 | Your daily brew of SSL certificates
 
 ## 目录
