@@ -1,6 +1,6 @@
 # CertCafe 🏷️ - Your SSL Certificate Café
 
-![CertCafe Logo](https://img.shields.io/badge/CertCafe-v1.0-brown?style=for-the-badge&logo=coffeescript&logoColor=white)
+![CertCafe Logo](https://img.shields.io/badge/CertCafe-v1.1.0-brown?style=for-the-badge&logo=coffeescript&logoColor=white)
 
 **简体中文** | [English](README_EN.md)
 

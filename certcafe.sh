@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ======================================
-#           🏷️ CertCafe v1.0
+#           🏷️ CertCafe v1.1.0
 #     Your SSL Certificate Café
 # ======================================
 #
