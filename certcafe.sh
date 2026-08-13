@@ -440,26 +440,95 @@ detect_configured_dns_provider() {
     return 1
 }
 
-# acme.sh 的续期依赖 cron 任务；默认开启，用户可在签发流程中选择关闭。
-configure_auto_renew() {
-    if [ "${ENABLE_AUTO_RENEW:-1}" != "1" ]; then
-        print_color $LATTE "已按选择跳过自动续期配置"
-        return 0
-    fi
+# acme.sh 使用一条全局 cron 任务续期全部证书，任务中不会逐个包含域名。
+is_auto_renew_enabled() {
+    crontab -l 2>/dev/null \
+        | tr -d '"' \
+        | grep -F "$ACME_INSTALL_DIR/acme.sh" \
+        | grep -q -- "--cron"
+}
 
-    if [ ! -x "./acme.sh" ]; then
-        print_color $ESPRESSO "未找到可执行的 acme.sh，无法配置自动续期"
+enable_auto_renew() {
+    if ! check_acme_installed; then
+        print_color $ESPRESSO "acme.sh未安装，请先执行一键安装部署！"
         return 1
     fi
 
+    cd "$ACME_INSTALL_DIR" || return 1
     ./acme.sh --install-cronjob >/dev/null 2>&1
-    if [ $? -eq 0 ]; then
-        print_color $MATCHA "已开启自动续期（acme.sh cron 任务）"
+    if is_auto_renew_enabled; then
+        print_color $MATCHA "✅ 已开启自动续期（适用于全部证书）"
         return 0
     fi
 
-    print_color $LATTE "自动续期任务配置失败，请稍后手动执行：$ACME_INSTALL_DIR/acme.sh --install-cronjob"
+    print_color $ESPRESSO "自动续期任务配置失败，请手动执行：$ACME_INSTALL_DIR/acme.sh --install-cronjob"
     return 1
+}
+
+disable_auto_renew() {
+    if ! check_acme_installed; then
+        print_color $ESPRESSO "acme.sh未安装，无需关闭自动续期"
+        return 1
+    fi
+
+    cd "$ACME_INSTALL_DIR" || return 1
+    ./acme.sh --uninstall-cronjob >/dev/null 2>&1
+    if ! is_auto_renew_enabled; then
+        print_color $MATCHA "✅ 已关闭自动续期，证书及其管理记录均已保留"
+        return 0
+    fi
+
+    print_color $ESPRESSO "自动续期任务移除失败，请手动执行：$ACME_INSTALL_DIR/acme.sh --uninstall-cronjob"
+    return 1
+}
+
+configure_auto_renew() {
+    if [ "${ENABLE_AUTO_RENEW:-1}" = "1" ]; then
+        enable_auto_renew
+    else
+        disable_auto_renew
+    fi
+}
+
+manage_auto_renew() {
+    if ! check_acme_installed; then
+        print_color $ESPRESSO "acme.sh未安装，请先执行一键安装部署！"
+        return 1
+    fi
+
+    print_color $BROWN "自动续期管理（全局设置）"
+    echo "======================================"
+    if is_auto_renew_enabled; then
+        echo -e "当前状态: ${MATCHA}启用${NC}"
+    else
+        echo -e "当前状态: ${LATTE}禁用${NC}"
+    fi
+    echo "acme.sh 的 cron 任务会统一管理全部证书。"
+    echo "1) 开启自动续期"
+    echo "2) 关闭自动续期（保留所有证书）"
+    echo "0) 返回上一级菜单"
+    read -p "请输入选择 [0-2]: " auto_renew_manage_choice
+
+    case $auto_renew_manage_choice in
+        1)
+            enable_auto_renew
+            ;;
+        2)
+            read -p "确定关闭全部证书的自动续期吗？[y/N]: " confirm_disable_renew
+            if [[ $confirm_disable_renew =~ ^[Yy]$ ]]; then
+                disable_auto_renew
+            else
+                print_color $LATTE "操作已取消"
+            fi
+            ;;
+        0)
+            return 0
+            ;;
+        *)
+            print_color $ESPRESSO "无效选择"
+            return 1
+            ;;
+    esac
 }
 
 # 显示DNS提供商帮助信息
@@ -640,7 +709,7 @@ auto_deploy() {
     read -p "是否开启自动续期？[Y/n]: " auto_renew_choice
     if [[ $auto_renew_choice =~ ^[Nn]$ ]]; then
         ENABLE_AUTO_RENEW=0
-        print_color $LATTE "本次将不会配置自动续期"
+        print_color $LATTE "签发成功后将关闭全局自动续期任务（保留所有证书）"
     else
         print_color $MATCHA "将默认开启自动续期"
     fi
@@ -871,7 +940,7 @@ uninstall_certificate() {
     print_color $BROWN "请选择卸载选项："
     echo "1) 删除单个域名证书"
     echo "2) 删除所有证书"
-    echo "3) 仅移除自动续期（保留证书文件）"
+    echo "3) 自动续期管理（保留证书文件）"
     read -p "请输入选择 [1-3]: " uninstall_choice
     
     case $uninstall_choice in
@@ -882,7 +951,7 @@ uninstall_certificate() {
             uninstall_all_certs
             ;;
         3)
-            disable_auto_renew
+            manage_auto_renew
             ;;
         *)
             print_color $ESPRESSO "无效选择"
@@ -1009,58 +1078,6 @@ uninstall_all_certs() {
     print_color $LATTE "☕ 所有SSL证书已被清理"
 }
 
-# 禁用自动续期
-disable_auto_renew() {
-     echo -e "${BROWN}您想禁用哪个域名的自动续期？${NC}"
-    
-    # 显示当前证书列表
-    echo -e "${CREAM}当前证书列表：${NC}"
-    echo "======================================"
-    ./acme.sh --list | grep -v "Main_Domain" | while read line; do
-        if [ -n "$line" ]; then
-            domain=$(echo "$line" | awk '{print $1}')
-            echo "  🔄 $domain"
-        fi
-    done
-    echo "======================================"
-    
-    read -p "请输入域名（留空则禁用所有）: " disable_domain
-    
-    if [ -z "$disable_domain" ]; then
-        print_color $ESPRESSO "⚠️  将禁用所有证书的自动续期"
-        read -p "确定要继续吗？[yes/NO]: " confirm_disable_all
-        
-        if [ "$confirm_disable_all" != "yes" ]; then
-            print_color $LATTE "操作已取消"
-            return 0
-        fi
-        
-        # 禁用所有自动续期
-        local cert_domains=$(./acme.sh --list | grep -v "Main_Domain" | awk '{print $1}')
-        local count=0
-        
-        for domain in $cert_domains; do
-            ./acme.sh --remove -d "$domain" --auto-upgrade 0
-            if [ $? -eq 0 ]; then
-                print_color $MATCHA "✅ 已禁用自动续期: $domain"
-                count=$((count + 1))
-            fi
-        done
-        
-        print_color $MATCHA "已禁用 $count 个证书的自动续期"
-        
-    else
-        # 禁用单个域名的自动续期
-        ./acme.sh --remove -d "$disable_domain" --auto-upgrade 0
-        
-        if [ $? -eq 0 ]; then
-            print_color $MATCHA "✅ 已禁用 $disable_domain 的自动续期"
-            print_color $LATTE "证书文件仍然保留，但不会自动更新"
-        else
-            print_color $ESPRESSO "❌ 操作失败"
-        fi
-    fi
-}
 
 # 手动清理（备用方案）
 manual_cleanup() {
@@ -1129,6 +1146,10 @@ check_cert_status() {
     local cert_count=0
     local renew_count=0
     local expiring_count=0
+    local auto_renew_enabled=0
+    if is_auto_renew_enabled; then
+        auto_renew_enabled=1
+    fi
     
     # 主要检测方法：直接扫描证书目录
     echo -e "${CREAM}扫描证书目录...${NC}"
@@ -1165,9 +1186,8 @@ check_cert_status() {
                     fi
                 fi
                 
-                # 检查自动续期
-                local renew_status=$(crontab -l 2>/dev/null | grep -c "$domain")
-                if [ $renew_status -gt 0 ]; then
+                # acme.sh 的 cron 是全局任务，会续期全部受管理的证书。
+                if [ "$auto_renew_enabled" -eq 1 ]; then
                     echo -e "  🔄 自动续期: ${MATCHA}启用${NC}"
                     renew_count=$((renew_count + 1))
                 else
@@ -1187,6 +1207,11 @@ check_cert_status() {
         echo -e "  ${LATTE}请使用『☕ 一键冲泡证书』功能申请SSL证书${NC}"
     else
         echo -e "  总证书数: ${MATCHA}$cert_count${NC}"
+        if [ "$auto_renew_enabled" -eq 1 ]; then
+            echo -e "  全局续期任务: ${MATCHA}已安装${NC}"
+        else
+            echo -e "  全局续期任务: ${LATTE}未安装${NC}"
+        fi
         echo -e "  自动续期: ${MATCHA}$renew_count${NC}"
         echo -e "  禁用续期: ${LATTE}$((cert_count - renew_count))${NC}"
         if [ $expiring_count -gt 0 ]; then
@@ -1241,7 +1266,8 @@ show_menu() {
     echo "5) 显示DNS配置帮助"
     echo "6) 卸载/停止证书"
 	echo "7) 证书状态报告"
-	echo "8) 查看当前配置的环境变量"
+	echo "8) 自动续期管理"
+	echo "9) 查看当前配置的环境变量"
 	echo "0) 退出"
     echo ""
 }
@@ -1259,7 +1285,7 @@ goodbye_from_cafe() {
 main() {
     while true; do
         show_menu
-        read -p "请选择操作 [0-8]: " choice
+        read -p "请选择操作 [0-9]: " choice
         
         case $choice in
 			0)
@@ -1289,6 +1315,9 @@ main() {
                 check_cert_status
                 ;;
             8)
+                manage_auto_renew
+                ;;
+            9)
                 show_env_config
                 ;;
             *)
